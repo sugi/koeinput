@@ -92,9 +92,9 @@ impl Recognizer for SherpaOffline {
         let s = self.inner.create_stream();
         s.accept_waveform(SAMPLE_RATE as i32, samples);
         self.inner.decode(&s);
-        Ok(s.get_result()
+        s.get_result()
             .map(|r| r.text.trim().to_string())
-            .unwrap_or_default())
+            .ok_or_else(|| RecognizerError::Decode("sherpa-onnx returned no result".into()))
     }
 }
 

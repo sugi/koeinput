@@ -39,9 +39,46 @@ pub enum ConfigError {
 
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
     match std::fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).map_err(|e| ConfigError::Parse(e.to_string())),
+        Ok(text) => {
+            let cfg: Config =
+                toml::from_str(&text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+            cfg.validate()?;
+            Ok(cfg)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
         Err(e) => Err(e.into()),
+    }
+}
+
+impl Config {
+    fn validate(&self) -> Result<(), ConfigError> {
+        fn check(key: &str, v: i64, lo: i64, hi: i64) -> Result<(), ConfigError> {
+            if (lo..=hi).contains(&v) {
+                Ok(())
+            } else {
+                Err(ConfigError::Parse(format!(
+                    "{key} = {v} is out of range ({lo} to {hi})"
+                )))
+            }
+        }
+        let ms = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+        check("threads", self.threads.into(), 1, 256)?;
+        check(
+            "partial_interval_ms",
+            ms(self.partial_interval_ms),
+            100,
+            10_000,
+        )?;
+        check("tail_ms", ms(self.tail_ms), 0, 2_000)?;
+        check("min_length_ms", ms(self.min_length_ms), 0, 10_000)?;
+        check("max_length_ms", ms(self.max_length_ms), 1_000, 600_000)?;
+        if self.min_length_ms > self.max_length_ms {
+            return Err(ConfigError::Parse(format!(
+                "min_length_ms = {} must not exceed max_length_ms = {}",
+                self.min_length_ms, self.max_length_ms
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -55,11 +92,17 @@ pub fn set_model(path: &Path, model_id: &str) -> Result<(), ConfigError> {
         .parse()
         .map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
     doc["model"] = toml_edit::value(model_id);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = parent.unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".tmp{}", std::process::id()));
+    let tmp = dir.join(tmp_name);
+    let result = std::fs::write(&tmp, doc.to_string()).and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::write(path, doc.to_string())?;
-    Ok(())
+    Ok(result?)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,10 +115,11 @@ pub struct Paths {
 
 impl Paths {
     pub fn from_env() -> Self {
-        Self::from_vars(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        Self::from_vars(|k| std::env::var(k).ok())
     }
 
     pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Self {
+        let get = |k: &str| get(k).filter(|v| !v.is_empty());
         let home = PathBuf::from(get("HOME").unwrap_or_else(|| "/".into()));
         let config_home = get("XDG_CONFIG_HOME")
             .map(PathBuf::from)
@@ -174,5 +218,78 @@ mod tests {
             p.catalog_file,
             PathBuf::from("/usr/share/koeinput/models.toml")
         );
+    }
+
+    #[test]
+    fn set_model_writes_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a/b/c.toml");
+        set_model(&p, "x").unwrap();
+        assert_eq!(load(&p).unwrap().model.as_deref(), Some("x"));
+        set_model(&p, "y").unwrap();
+        assert_eq!(load(&p).unwrap().model.as_deref(), Some("y"));
+        let names: Vec<_> = std::fs::read_dir(p.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("c.toml")]);
+    }
+
+    #[test]
+    fn empty_env_values_are_ignored() {
+        let vars: HashMap<&str, &str> = [
+            ("HOME", "/h"),
+            ("XDG_CONFIG_HOME", ""),
+            ("XDG_DATA_HOME", ""),
+            ("KOEINPUT_DATA_DIR", ""),
+        ]
+        .into();
+        let p = Paths::from_vars(|k| vars.get(k).map(|v| v.to_string()));
+        assert_eq!(
+            p.config_file,
+            PathBuf::from("/h/.config/koeinput/config.toml")
+        );
+        assert_eq!(
+            p.models_dir,
+            PathBuf::from("/h/.local/share/koeinput/models")
+        );
+        assert_eq!(
+            p.catalog_file,
+            PathBuf::from("/usr/share/koeinput/models.toml")
+        );
+        let p = Paths::from_vars(|k| (k == "HOME").then(String::new));
+        assert_eq!(
+            p.config_file,
+            PathBuf::from("/.config/koeinput/config.toml")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_timing_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        let cases = [
+            ("partial_interval_ms = 0", "partial_interval_ms"),
+            ("partial_interval_ms = 10001", "partial_interval_ms"),
+            ("tail_ms = 2001", "tail_ms"),
+            ("max_length_ms = 0", "max_length_ms"),
+            ("max_length_ms = 600001", "max_length_ms"),
+            ("min_length_ms = 10001", "min_length_ms"),
+            (
+                "min_length_ms = 3000\nmax_length_ms = 2000",
+                "min_length_ms",
+            ),
+            ("threads = 0", "threads"),
+            ("threads = 257", "threads"),
+        ];
+        for (text, key) in cases {
+            std::fs::write(&p, text).unwrap();
+            match load(&p) {
+                Err(ConfigError::Parse(m)) => assert!(m.contains(key), "{text}: {m}"),
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        std::fs::write(&p, "tail_ms = 0\nmin_length_ms = 0\nthreads = 1\n").unwrap();
+        assert!(load(&p).is_ok());
     }
 }

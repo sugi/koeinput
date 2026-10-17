@@ -15,12 +15,6 @@ Each item names the milestone it belongs to.
   - Silero's 20 s maximum speech length splits long monologues mid-word.
   - Fillers are also removed inside longer words; judge this with real transcripts.
 - Config (`crates/core/src/config.rs`):
-  - Write the config through a temporary file and rename.
-  - Filter empty environment values in `Paths::from_vars`, not only in `from_env`.
-  - Validate timing values (`partial_interval_ms = 0`, `max_length_ms = 0`).
-- Recognizer and audio:
-  - `SherpaOffline::decode` turns a missing result into empty text instead of an error.
-  - Add tests for 24-bit and float WAV files.
 - Session and engine tests: recognizer errors during finalize and on a partial tick, `max_length` reached during the tail, `SessionConfig::from_config`, VAD factory failure, and the 2 s no-audio timeout.
 - CLI:
   - `koeinput transcribe` stops the whole batch at the first bad file.
@@ -43,3 +37,8 @@ Each item names the milestone it belongs to.
   - Label local read errors as I/O errors, not download errors.
   - Add tests for cleanup after an extraction failure, directory entries, reinstall and the URL path.
 - CLI: download progress and `model list` mix MB and MiB. (M4)
+- Config (`crates/core/src/config.rs`) (M4):
+  - `set_model` writes the config through a temporary file and renames it.
+  - `Paths::from_vars` treats empty environment values as unset.
+  - `load` validates `threads` and the timing values and names the key and range in the error.
+- `SherpaOffline::decode` returns an error when sherpa-onnx gives no result. Tests for 24-bit and float WAV files added. (M4)

@@ -82,4 +82,50 @@ mod tests {
             Err(AudioError::Io(_))
         ));
     }
+
+    #[test]
+    fn reads_24bit_and_float_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let reference = dir.path().join("ref.wav");
+        write_wav(&reference, 16000, 1, 0.25);
+        let want = read_wav_16k_mono(&reference).unwrap();
+        let sine = |i: usize| {
+            (i as f32 / 16000.0 * 440.0 * std::f32::consts::TAU).sin() * 8000.0 / 32768.0
+        };
+
+        let p24 = dir.path().join("24.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 24,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&p24, spec).unwrap();
+        for i in 0..want.len() {
+            w.write_sample((sine(i) * 8_388_608.0) as i32).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let pf = dir.path().join("f32.wav");
+        let spec = hound::WavSpec {
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+            ..spec
+        };
+        let mut w = hound::WavWriter::create(&pf, spec).unwrap();
+        for i in 0..want.len() {
+            w.write_sample(sine(i)).unwrap();
+        }
+        w.finalize().unwrap();
+
+        for p in [p24, pf] {
+            let got = read_wav_16k_mono(&p).unwrap();
+            assert_eq!(got.len(), want.len());
+            assert!(
+                got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-3),
+                "{}",
+                p.display()
+            );
+        }
+    }
 }
