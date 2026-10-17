@@ -179,7 +179,7 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
 // modifier shows in the states of later keys; a plain key auto-repeats.
 // The raw key keeps every state bit; the normalized one may not.
 bool KoeInputAddon::hotkeyHeld(const fcitx::Key &rawKey, uint64_t nowMs) const {
-    if (hotkey_.empty()) return false;
+    if (hotkey_.empty() || !hotkey_.held) return false;
     const fcitx::KeyStates modifier = modifierStates(hotkey_.sym);
     if (modifier) return (rawKey.states() & modifier) == modifier;
     return nowMs - hotkey_.pressMs <= Controller::kRepeatGapMs;
@@ -199,11 +199,9 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
             return;
         }
         const auto &hotkeys = *config_.hotkey;
-        // A modifier hotkey's release pairs by sym whatever the states, since
-        // the stored press may already be dropped (AltGr has no isReleaseOfModifier).
         const bool modifierRelease =
             std::any_of(hotkeys.begin(), hotkeys.end(), [&](const fcitx::Key &k) {
-                return isModifierKey(k) && (key.sym() == k.sym() || key.isReleaseOfModifier(k));
+                return k.isModifier() && key.isReleaseOfModifier(k);
             });
         if (sameKey || modifierRelease || key.checkKeyList(hotkeys)) {
             hotkey_ = {};
@@ -222,10 +220,12 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     // key() is normalized and has lost the Repeat state; rawKey() keeps it.
     const bool flagged = event.rawKey().states().test(fcitx::KeyState::Repeat);
     // Frontends report the state before the press, so a held modifier hotkey
-    // shows in every later press. A press without it means the release was lost.
-    if (!sameKey && !hotkey_.empty()) {
+    // shows in every later press. A press without it means the release was
+    // lost; the key stays stored so its release still pairs, but cannot
+    // start a chord.
+    if (!sameKey && hotkey_.held) {
         const fcitx::KeyStates modifier = modifierStates(hotkey_.sym);
-        if (modifier && (event.rawKey().states() & modifier) != modifier) hotkey_ = {};
+        if (modifier && (event.rawKey().states() & modifier) != modifier) hotkey_.held = false;
     }
     if (chordKey != chord_.end()) {
         // A chord key repeats like the hotkey below (Alt_R released first, the

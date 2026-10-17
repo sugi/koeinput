@@ -701,6 +701,63 @@ int main() {
                   [&] {
                       committed(21);
                       displayClear(ic());
+                  })
+            // A press carrying Mod5 is evidence that AltGr is still held.
+            .then(0, "altgr held: press ISO_Level3_Shift",
+                  [&] {
+                      setHotkeys("ISO_Level3_Shift", "Control+space");
+                      KI_CHECK(send("ISO_Level3_Shift", false));
+                  })
+            .then(700, "altgr held: Control+space with Mod5 is a chord",
+                  [&] {
+                      const Key chord(FcitxKey_space, KeyStates({KeyState::Ctrl, KeyState::Mod5}));
+                      KI_CHECK(sendKey(instance, uuid, chord, false));
+                      KI_CHECK(sendKey(instance, uuid, chord, true));
+                  })
+            .then(600, "altgr held: still recording, release ISO_Level3_Shift",
+                  [&] {
+                      KI_CHECK(ic()->inputPanel().auxUp().toString() == "Recording");
+                      KI_CHECK(send("ISO_Level3_Shift", true));
+                  })
+            .then(1500, "altgr held: committed",
+                  [&] {
+                      committed(22);
+                      displayClear(ic());
+                      setHotkey("Alt_R");
+                  })
+            // After a lost Alt_R release, Control+Alt_R belongs to the app: so does its release.
+            .then(0, "lost release, other combination: press Alt_R", [&] { KI_CHECK(send("Alt_R", false)); })
+            .then(300, "lost release, other combination: esc cancels",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(1100, "lost release, other combination: Control+Alt_R passes with its release",
+                  [&] {
+                      KI_CHECK(!send("Control_L", false));
+                      KI_CHECK(!send("Control+Alt_R", false));
+                      KI_CHECK(!send("Control+Alt+Alt_R", true));
+                      KI_CHECK(!send("Control_L", true));
+                      committed(22);
+                      displayClear(ic());
+                  })
+            // Control+Alt_R during a held Control+space session is not the Alt_R hotkey.
+            .then(0, "other combination mid-hold: press Control+space",
+                  [&] {
+                      setHotkeys("Control+space", "Alt_R");
+                      KI_CHECK(send("Control+space", false));
+                  })
+            .then(700, "other combination mid-hold: Control+Alt_R passes, the session goes on",
+                  [&] {
+                      KI_CHECK(!send("Control+Alt_R", false));
+                      KI_CHECK(!send("Control+Alt+Alt_R", true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(700, "other combination mid-hold: release space", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "other combination mid-hold: committed",
+                  [&] {
+                      committed(23);
+                      displayClear(ic());
                       setHotkey("Alt_R");
                   })
             .then(0, "daemon killed: press",
@@ -711,7 +768,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(21);
+                      committed(23);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -721,7 +778,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(22);
+                committed(24);
                 displayClear(ic());
             });
     } else {

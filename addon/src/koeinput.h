@@ -61,6 +61,9 @@ private:
         int code = 0;
         fcitx::KeySym sym = FcitxKey_None;
         uint64_t pressMs = 0;
+        // False once a later press lacked the key's modifier state: the key
+        // is still remembered for its release, but it cannot start a chord.
+        bool held = true;
 
         bool empty() const { return code == 0 && sym == FcitxKey_None; }
         bool matches(const fcitx::Key &key) const {
@@ -68,7 +71,7 @@ private:
         }
     };
 
-    bool hotkeyHeld(const fcitx::Key &key, uint64_t nowMs) const;
+    bool hotkeyHeld(const fcitx::Key &rawKey, uint64_t nowMs) const;
 
     PressedKey hotkey_;
     // Other configured hotkeys pressed while hotkey_ is down; they do nothing.
