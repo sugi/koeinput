@@ -833,7 +833,6 @@ dependencies = [
  "futures-util",
  "koeinput-core",
  "koeinput-dbus-api",
- "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",

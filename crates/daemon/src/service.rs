@@ -52,24 +52,40 @@ impl Recognizer1 {
         #[zbus(header)] hdr: Header<'_>,
         #[zbus(connection)] conn: &Connection,
     ) -> Result<u32, KoeError> {
+        #[cfg(feature = "test-hooks")]
+        if let Some(d) = test_delay("KOEINPUT_TEST_START_DELAY_MS") {
+            tokio::time::sleep(d).await;
+        }
         let owner = hdr.sender().ok_or_else(|| KoeError::NoSuchSession("no sender".into()))?.to_owned();
         let emitter = SignalEmitter::new(conn, OBJECT_PATH)?.set_destination(BusName::Unique(owner.clone()));
-        let mut s = self.shared.lock().unwrap();
-        if s.current.is_some() {
-            return Err(KoeError::Busy("a session is already running".into()));
-        }
-        let engine = match &s.readiness {
-            Readiness::Ready(e) => e.clone(),
-            Readiness::Loading => return Err(KoeError::NoModel("the model is still loading".into())),
-            Readiness::Missing(hint) => return Err(KoeError::NoModel(hint.clone())),
+        let (id, handle) = {
+            let mut s = self.shared.lock().unwrap();
+            if s.current.is_some() {
+                return Err(KoeError::Busy("a session is already running".into()));
+            }
+            let engine = match &s.readiness {
+                Readiness::Ready(e) => e.clone(),
+                Readiness::Loading => return Err(KoeError::NoModel("the model is still loading".into())),
+                Readiness::Missing(hint) => return Err(KoeError::NoModel(hint.clone())),
+            };
+            s.next_id += 1;
+            let id = s.next_id;
+            let source = if s.test_source { test_source() } else { Source::Microphone(s.source.clone()) };
+            let handle = Arc::new(engine.start(source));
+            s.current = Some(Current { id, owner: owner.clone(), handle: handle.clone() });
+            (id, handle)
         };
-        s.next_id += 1;
-        let id = s.next_id;
-        let source = if s.test_source { test_source() } else { Source::Microphone(s.source.clone()) };
-        let handle = Arc::new(engine.start(source));
-        s.current = Some(Current { id, owner, handle: handle.clone() });
-        drop(s);
-        spawn_forwarder(emitter, self.shared.clone(), id, handle);
+        spawn_forwarder(emitter, self.shared.clone(), id, handle.clone());
+        // If the caller left before the session was stored, the owner watch found nothing to cancel.
+        // A departure after this check reaches the watch with the session in place.
+        match caller_present(conn, &owner).await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::info!(session = id, "client left during Start; cancelling");
+                handle.cancel();
+            }
+            Err(e) => tracing::warn!(session = id, "cannot check the caller: {e}"),
+        }
         Ok(id)
     }
 
@@ -127,6 +143,16 @@ fn test_source() -> Source {
 #[cfg(not(feature = "test-hooks"))]
 fn test_source() -> Source {
     unreachable!("test source requested without the test-hooks feature")
+}
+
+#[cfg(feature = "test-hooks")]
+pub fn test_delay(var: &str) -> Option<std::time::Duration> {
+    std::env::var(var).ok()?.parse().ok().map(std::time::Duration::from_millis)
+}
+
+async fn caller_present(conn: &Connection, owner: &UniqueName<'static>) -> zbus::Result<bool> {
+    let dbus = zbus::fdo::DBusProxy::new(conn).await?;
+    Ok(dbus.name_has_owner(BusName::Unique(owner.clone())).await?)
 }
 
 fn clear_current(shared: &Mutex<Shared>, id: u32) {

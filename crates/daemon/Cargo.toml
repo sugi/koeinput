@@ -10,19 +10,18 @@ name = "koeinput-daemon"
 path = "src/main.rs"
 
 [features]
-test-hooks = ["koeinput-core/test-hooks"]
+test-hooks = ["koeinput-core/test-hooks", "tokio/time"]
 
 [dependencies]
 anyhow = "1.0.104"
 futures-util = "0.3.34"
 koeinput-core = { path = "../core" }
 koeinput-dbus-api = { version = "0.1.0", path = "../dbus-api" }
-thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
 
 [dev-dependencies]
 futures-util = "0.3.34"
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
