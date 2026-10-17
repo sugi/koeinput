@@ -66,6 +66,59 @@ To keep `target/` small:
   Change the limit with `KOEINPUT_TARGET_LIMIT_GB`. A full set of dev, test and release builds takes about 3.5 GB.
 - A git worktree under `.worktrees/` has its own `target/`. Removing the worktree removes it.
 
+## fcitx5 addon
+
+The addon lives in `addon/`. It builds and tests in the build containers, never on the host.
+
+```sh
+scripts/addon build
+scripts/addon test
+KOEINPUT_DEV_IMAGE=bookworm scripts/addon test
+```
+
+- The first image is Debian 13 (fcitx5 5.1). The `bookworm` image is Debian 12 (fcitx5 5.0). The addon must build and pass in both.
+- `scripts/addon test` builds the daemon with the `test-hooks` feature and runs the tests against it. Everything runs under `dbus-run-session` inside the container. Never run the tests on your own session bus.
+- The Debian 12 run skips the `daemonclient` test, because the daemon is built only in the Debian 13 image.
+- The addon test uses its own `dbus.conf`. The system one depends on the `keyboard` addon, which is built into the fcitx5 binary and cannot load in a test instance.
+- `translation` checks that `addon/po/ja.po` compiles. To regenerate the catalog, run `scripts/dev sh -c 'xgettext --keyword=_ --language=C++ --from-code=UTF-8 --add-comments --package-name=fcitx5-koeinput -o addon/po/fcitx5-koeinput.pot addon/src/*.cpp addon/src/*.h'`.
+
+### Compatibility with fcitx5 5.0
+
+These points came up while making the addon build on 5.0.21:
+
+- `ITestFrontend::sendKeyEvent` does not exist. The tests send keys through the input context.
+- `fcitx-utils/dbus/variant.h` does not exist. The addon does not use it.
+- Module headers are included by file name, for example `dbus_public.h`.
+- The sd-event timer has a default accuracy of 250 ms. Timers can fire up to 250 ms late unless the accuracy is set.
+
+### Settings
+
+Open System Settings, then Input Method, then Configure add-ons, then KoeInput. You can also run `fcitx5-configtool`. The settings are:
+
+- the hotkey (default Right Alt);
+- tap mode: a short press keeps recording until the next press;
+- the tap threshold in milliseconds;
+- whether to show partial text while you speak.
+
+### Host check
+
+The host check needs the packages from M3, so it is done after M3. See the install section that M3 adds to this file.
+
+For each app (WezTerm, Chrome, Firefox, Emacs, Discord), check:
+
+1. Hold Right Alt and speak after "録音中" appears. The text arrives when you release the key.
+2. Tap Right Alt, speak, and press it again.
+3. Partial text appears while you speak.
+4. Esc cancels the session.
+5. Another key while recording cancels the session.
+6. A password field does not start recording.
+7. While Mozc is composing, Right Alt does nothing.
+8. Click into another window during a session.
+9. Change the hotkey in the settings and try the new one.
+10. Stop the daemon during a session.
+
+For each app, note whether hold mode works and how the partial text looks. These notes feed M4.
+
 ## Privacy
 
 Recognized text is never written to logs unless you set `KOEINPUT_LOG_TEXT=1`.

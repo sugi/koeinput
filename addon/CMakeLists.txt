@@ -9,6 +9,7 @@ add_compile_options(-Wall -Wextra)
 find_package(Fcitx5Core REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
 find_package(Fcitx5Config REQUIRED)
+find_package(Gettext REQUIRED)
 find_package(Fcitx5Module REQUIRED COMPONENTS DBus Notifications TestFrontend)
 
 set(KOEINPUT_GETTEXT_DOMAIN "fcitx5-koeinput")
@@ -26,6 +27,8 @@ configure_file(koeinput.conf.in "${CMAKE_BINARY_DIR}/testdata/addon/koeinput.con
 install(TARGETS koeinput DESTINATION "${FCITX_INSTALL_ADDONDIR}")
 install(FILES "${CMAKE_BINARY_DIR}/testdata/addon/koeinput.conf"
   DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
+
+add_subdirectory(po)
 
 enable_testing()
 
@@ -49,3 +52,5 @@ add_executable(daemonclient_test test/daemonclient_test.cpp src/daemonclient.cpp
 target_link_libraries(daemonclient_test PRIVATE Fcitx5::Utils)
 add_test(NAME daemonclient COMMAND daemonclient_test)
 set_tests_properties(daemonclient PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+
+add_test(NAME translation COMMAND ${GETTEXT_MSGFMT_EXECUTABLE} --check -o /dev/null ${CMAKE_SOURCE_DIR}/po/ja.po)

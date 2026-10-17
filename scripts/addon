@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds, tests or packages the fcitx5 addon in the build container.
-# Usage: scripts/addon build|test|deb   (KOEINPUT_DEV_IMAGE=bookworm for the Debian 12 check)
+# Builds or tests the fcitx5 addon in the build container.
+# Usage: scripts/addon build|test   (KOEINPUT_DEV_IMAGE=bookworm for the Debian 12 check)
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 name=${KOEINPUT_DEV_IMAGE:-trixie}
@@ -18,9 +18,7 @@ case "${1:-}" in
       daemon=/src/target/debug/koeinput-daemon
     fi
     "$root/scripts/dev" sh -c "$configure && $compile && KOEINPUT_TEST_DAEMON=$daemon dbus-run-session -- ctest --test-dir $build --output-on-failure" ;;
-  deb)
-    "$root/scripts/dev" sh -c "$configure && $compile && cd $build && cpack -G DEB" ;;
   *)
-    echo "usage: scripts/addon build|test|deb" >&2
+    echo "usage: scripts/addon build|test" >&2
     exit 2 ;;
 esac
