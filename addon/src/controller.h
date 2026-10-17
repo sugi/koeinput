@@ -32,6 +32,7 @@ struct Settings {
     bool showPartial = true;
 };
 
+// Implementations must not call back into the Controller from inside an action.
 class Actions {
 public:
     virtual ~Actions() = default;
@@ -51,7 +52,7 @@ public:
 // what to display. It knows nothing about fcitx5 or D-Bus.
 class Controller {
 public:
-    static constexpr uint64_t kRepeatGapMs = 500;
+    static constexpr uint64_t kRepeatGapMs = 1000;
     static constexpr uint64_t kFinalizeTimeoutMs = 10000;
     static constexpr std::size_t kMaxBuffered = 64;
 
@@ -60,7 +61,7 @@ public:
     void setSettings(const Settings &settings) { settings_ = settings; }
 
     // Key inputs return true when the key must be swallowed.
-    bool hotkeyPress(uint64_t nowMs, bool eligible);
+    bool hotkeyPress(uint64_t nowMs, bool eligible, bool modifier);
     bool hotkeyRelease(uint64_t nowMs);
     bool escape();
     bool otherKeyPress();
@@ -84,8 +85,8 @@ private:
     struct Buffered {
         SignalKind kind;
         uint32_t id;
-        std::string a;
-        std::string b;
+        std::string value;
+        std::string detail;
     };
 
     void begin(uint64_t nowMs);
@@ -96,7 +97,7 @@ private:
     void showRecording();
     void releaseDisplay();
     bool current(uint32_t id) const { return id_ && *id_ == id; }
-    void buffer(SignalKind kind, uint32_t id, const std::string &a, const std::string &b = {});
+    void buffer(SignalKind kind, uint32_t id, const std::string &value, const std::string &detail = {});
     void notifyCallError(CallError kind, const std::string &message);
 
     Actions &actions_;

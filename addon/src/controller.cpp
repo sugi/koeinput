@@ -1,4 +1,5 @@
 #include "controller.h"
+#include <algorithm>
 #include <utility>
 
 namespace koeinput {
@@ -21,10 +22,11 @@ CallError callErrorFromName(const std::string &name) {
 Controller::Controller(Actions &actions, Settings settings)
     : actions_(actions), settings_(settings) {}
 
-bool Controller::hotkeyPress(uint64_t nowMs, bool eligible) {
-    // Modifier keys do not auto-repeat and other keys repeat every few tens of
-    // milliseconds, so a long gap means the release was lost on the way.
-    const bool repeat = keyDown_ && nowMs - lastPressMs_ < kRepeatGapMs;
+bool Controller::hotkeyPress(uint64_t nowMs, bool eligible, bool modifier) {
+    // Modifier keys never auto-repeat, so a press while one is down means the
+    // release was lost. A plain key first repeats after the desktop's initial
+    // delay of 500 to 660 ms, so the gap must be longer than that.
+    const bool repeat = !modifier && keyDown_ && nowMs - lastPressMs_ <= kRepeatGapMs;
     lastPressMs_ = nowMs;
     if (repeat) return ownsPress_;
     keyDown_ = true;
@@ -106,10 +108,10 @@ void Controller::startReply(uint32_t id) {
     for (const auto &b : pending) {
         if (phase_ == Phase::Idle) break;
         switch (b.kind) {
-        case SignalKind::State: stateChanged(b.id, b.a); break;
-        case SignalKind::Partial: partial(b.id, b.a); break;
-        case SignalKind::Final: finalText(b.id, b.a); break;
-        case SignalKind::Error: error(b.id, b.a, b.b); break;
+        case SignalKind::State: stateChanged(b.id, b.value); break;
+        case SignalKind::Partial: partial(b.id, b.value); break;
+        case SignalKind::Final: finalText(b.id, b.value); break;
+        case SignalKind::Error: error(b.id, b.value, b.detail); break;
         }
     }
     if (phase_ == Phase::Active && pendingStop_) {
@@ -219,9 +221,9 @@ void Controller::requestStop() {
     }
     if (phase_ != Phase::Active) return;
     phase_ = Phase::Finalizing;
-    actions_.callStop(*id_);
     if (!displayReleased_) actions_.showStatus(Status::Finalizing);
     startWatchdog();
+    actions_.callStop(*id_);
 }
 
 void Controller::cancel() {
@@ -274,8 +276,17 @@ void Controller::releaseDisplay() {
     displayReleased_ = true;
 }
 
-void Controller::buffer(SignalKind kind, uint32_t id, const std::string &a, const std::string &b) {
-    if (buffered_.size() < kMaxBuffered) buffered_.push_back({kind, id, a, b});
+void Controller::buffer(SignalKind kind, uint32_t id, const std::string &value, const std::string &detail) {
+    if (buffered_.size() < kMaxBuffered) {
+        buffered_.push_back({kind, id, value, detail});
+        return;
+    }
+    if (kind == SignalKind::Partial) return;
+    auto partial = std::find_if(buffered_.begin(), buffered_.end(),
+                                [](const Buffered &b) { return b.kind == SignalKind::Partial; });
+    if (partial == buffered_.end()) return;
+    buffered_.erase(partial);
+    buffered_.push_back({kind, id, value, detail});
 }
 
 void Controller::notifyCallError(CallError kind, const std::string &message) {

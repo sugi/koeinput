@@ -79,14 +79,14 @@ struct Fixture {
     Controller c;
     explicit Fixture(Settings s = {}) : c(a, s) {}
     // Hotkey down at t=0 and the Start reply with id 7; the log is cleared.
-    void started(uint32_t id = 7) {
-        c.hotkeyPress(0, true);
+    void started(uint32_t id = 7, bool modifier = true) {
+        c.hotkeyPress(0, true, modifier);
         c.startReply(id);
         a.take();
     }
     // As started(), plus the daemon reports recording.
-    void recording(uint32_t id = 7) {
-        started(id);
+    void recording(uint32_t id = 7, bool modifier = true) {
+        started(id, modifier);
         c.stateChanged(id, "recording");
         a.take();
     }
@@ -94,7 +94,7 @@ struct Fixture {
 
 void hold_commits_final() {
     Fixture f;
-    CHECK(f.c.hotkeyPress(0, true));
+    CHECK(f.c.hotkeyPress(0, true, true));
     CHECK_LOG(f.a.take(), "status Preparing", "start");
     f.c.startReply(7);
     f.c.stateChanged(7, "starting");
@@ -103,7 +103,7 @@ void hold_commits_final() {
     f.c.partial(7, "あ");
     CHECK_LOG(f.a.take(), "partial あ");
     CHECK(f.c.hotkeyRelease(1000));
-    CHECK_LOG(f.a.take(), "stop 7", "status Finalizing", "timer 10000");
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
     f.c.finalText(7, "あい");
     CHECK_LOG(f.a.take(), "untimer", "clear", "commit あい");
     f.c.stateChanged(7, "done");
@@ -116,8 +116,8 @@ void tap_keeps_recording_until_next_press() {
     f.recording();
     CHECK(f.c.hotkeyRelease(100));
     CHECK_LOG(f.a.take(), "status RecordingTap");
-    CHECK(f.c.hotkeyPress(2000, true));
-    CHECK_LOG(f.a.take(), "stop 7", "status Finalizing", "timer 10000");
+    CHECK(f.c.hotkeyPress(2000, true, true));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
     CHECK(f.c.hotkeyRelease(2100));
     CHECK_LOG(f.a.take());
 }
@@ -135,7 +135,7 @@ void tap_toggle_off_release_stops() {
     Fixture f(Settings{false, 300, true});
     f.recording();
     CHECK(f.c.hotkeyRelease(100));
-    CHECK_LOG(f.a.take(), "stop 7", "status Finalizing", "timer 10000");
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
 }
 
 void threshold_boundary() {
@@ -149,13 +149,13 @@ void threshold_boundary() {
         Fixture f;
         f.recording();
         f.c.hotkeyRelease(300);
-        CHECK_LOG(f.a.take(), "stop 7", "status Finalizing", "timer 10000");
+        CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
     }
 }
 
 void ineligible_press_and_release_pass() {
     Fixture f;
-    CHECK(!f.c.hotkeyPress(0, false));
+    CHECK(!f.c.hotkeyPress(0, false, true));
     CHECK(!f.c.hotkeyRelease(100));
     CHECK_LOG(f.a.take());
     CHECK(f.c.idle());
@@ -163,26 +163,26 @@ void ineligible_press_and_release_pass() {
 
 void repeats_are_swallowed() {
     Fixture f;
-    f.recording();
-    CHECK(f.c.hotkeyPress(30, true));
-    CHECK(f.c.hotkeyPress(60, true));
+    f.recording(7, false);
+    CHECK(f.c.hotkeyPress(30, true, false));
+    CHECK(f.c.hotkeyPress(60, true, false));
     CHECK_LOG(f.a.take());
     CHECK(f.c.hotkeyRelease(1000));
-    CHECK_LOG(f.a.take(), "stop 7", "status Finalizing", "timer 10000");
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
 }
 
 void repeats_of_passed_press_pass() {
     Fixture f;
-    CHECK(!f.c.hotkeyPress(0, false));
-    CHECK(!f.c.hotkeyPress(30, true));
+    CHECK(!f.c.hotkeyPress(0, false, false));
+    CHECK(!f.c.hotkeyPress(30, true, false));
     CHECK_LOG(f.a.take());
 }
 
 void lost_release_new_press_stops() {
     Fixture f;
     f.recording();
-    CHECK(f.c.hotkeyPress(2000, true));
-    CHECK_LOG(f.a.take(), "stop 7", "status Finalizing", "timer 10000");
+    CHECK(f.c.hotkeyPress(2000, true, true));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
     CHECK(f.c.hotkeyRelease(2100));
     CHECK_LOG(f.a.take());
 }
@@ -255,7 +255,7 @@ void focus_lost_while_finalizing_cancels() {
 
 void signals_before_reply_are_replayed() {
     Fixture f;
-    f.c.hotkeyPress(0, true);
+    f.c.hotkeyPress(0, true, true);
     f.a.take();
     f.c.stateChanged(7, "starting");
     f.c.stateChanged(7, "recording");
@@ -267,7 +267,7 @@ void signals_before_reply_are_replayed() {
 
 void buffered_signals_for_other_ids_are_dropped() {
     Fixture f;
-    f.c.hotkeyPress(0, true);
+    f.c.hotkeyPress(0, true, true);
     f.a.take();
     f.c.partial(3, "x");
     f.c.startReply(7);
@@ -276,7 +276,7 @@ void buffered_signals_for_other_ids_are_dropped() {
 
 void buffer_is_capped() {
     Fixture f;
-    f.c.hotkeyPress(0, true);
+    f.c.hotkeyPress(0, true, true);
     f.a.take();
     for (int i = 0; i < 100; ++i) f.c.partial(7, std::to_string(i));
     f.c.startReply(7);
@@ -285,17 +285,17 @@ void buffer_is_capped() {
 
 void release_before_reply_stops_after_reply() {
     Fixture f;
-    f.c.hotkeyPress(0, true);
+    f.c.hotkeyPress(0, true, true);
     f.a.take();
     CHECK(f.c.hotkeyRelease(1000));
     CHECK_LOG(f.a.take());
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "stop 7", "status Finalizing", "timer 10000");
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
 }
 
 void esc_before_reply_cancels_after_reply() {
     Fixture f;
-    f.c.hotkeyPress(0, true);
+    f.c.hotkeyPress(0, true, true);
     f.a.take();
     CHECK(f.c.escape());
     CHECK_LOG(f.a.take(), "clear");
@@ -318,7 +318,7 @@ void start_errors_map_to_notices() {
     };
     for (auto &k : cases) {
         Fixture f;
-        f.c.hotkeyPress(0, true);
+        f.c.hotkeyPress(0, true, true);
         f.a.take();
         f.c.startFailed(k.kind, "msg");
         CHECK_LOG(f.a.take(), "clear", k.expected);
@@ -330,7 +330,7 @@ void start_errors_map_to_notices() {
 
 void start_failure_after_user_cancel_is_quiet() {
     Fixture f;
-    f.c.hotkeyPress(0, true);
+    f.c.hotkeyPress(0, true, true);
     f.c.escape();
     f.a.take();
     f.c.startFailed(CallError::NoDaemon, "");
@@ -453,9 +453,9 @@ void reply_when_idle_cancels_stray_session() {
     CHECK_LOG(f.a.take(), "cancel 9");
 }
 
-void daemon_left_while_starting_then_reply() {
+void daemon_left_while_starting_then_start_failure() {
     Fixture f;
-    f.c.hotkeyPress(0, true);
+    f.c.hotkeyPress(0, true, true);
     f.a.take();
     f.c.daemonLeft();
     CHECK_LOG(f.a.take(), "clear", "notify DaemonLeft");
@@ -469,7 +469,7 @@ void new_session_after_finish() {
     f.c.hotkeyRelease(1000);
     f.c.finalText(7, "x");
     f.a.take();
-    CHECK(f.c.hotkeyPress(5000, true));
+    CHECK(f.c.hotkeyPress(5000, true, true));
     CHECK_LOG(f.a.take(), "status Preparing", "start");
     f.c.startReply(8);
     f.c.partial(7, "old");
@@ -482,7 +482,7 @@ void press_while_finalizing_is_swallowed() {
     f.recording();
     f.c.hotkeyRelease(1000);
     f.a.take();
-    CHECK(f.c.hotkeyPress(1200, true));
+    CHECK(f.c.hotkeyPress(1200, true, true));
     CHECK(f.c.hotkeyRelease(1300));
     CHECK_LOG(f.a.take());
 }
@@ -497,6 +497,134 @@ void call_error_names() {
     CHECK(callErrorFromName("org.freedesktop.DBus.Error.TimedOut") == CallError::Timeout);
     CHECK(callErrorFromName("org.nemui.KoeInput.Error.NoSuchSession") == CallError::Other);
     CHECK(callErrorFromName("") == CallError::Other);
+}
+
+void first_repeat_of_plain_key_is_a_repeat() {
+    Fixture f;
+    f.recording(7, false);
+    CHECK(f.c.hotkeyPress(600, true, false));
+    CHECK(f.c.hotkeyPress(630, true, false));
+    CHECK_LOG(f.a.take());
+    CHECK(f.c.hotkeyRelease(2000));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+}
+
+void plain_key_lost_release_after_long_gap() {
+    Fixture f;
+    f.recording(7, false);
+    CHECK(f.c.hotkeyPress(1500, true, false));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+}
+
+void repeat_gap_is_inclusive() {
+    Fixture f;
+    f.recording(7, false);
+    CHECK(f.c.hotkeyPress(1000, true, false));
+    CHECK_LOG(f.a.take());
+}
+
+void modifier_press_while_down_is_new_press() {
+    Fixture f;
+    f.recording();
+    CHECK(f.c.hotkeyPress(100, true, true));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+}
+
+void other_key_in_starting_cancels() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    CHECK(!f.c.otherKeyPress());
+    CHECK_LOG(f.a.take(), "clear");
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take(), "cancel 7");
+    CHECK(f.c.idle());
+}
+
+void other_key_in_starting_with_pending_stop_releases_display() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    CHECK(f.c.hotkeyRelease(1000));
+    CHECK_LOG(f.a.take());
+    CHECK(!f.c.otherKeyPress());
+    CHECK_LOG(f.a.take(), "clear");
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take(), "timer 10000", "stop 7");
+    f.c.finalText(7, "x");
+    CHECK_LOG(f.a.take(), "untimer", "commit x");
+}
+
+void focus_lost_in_starting() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    f.c.focusLost();
+    CHECK_LOG(f.a.take(), "clear");
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take(), "cancel 7");
+    CHECK(f.c.idle());
+}
+
+void buffered_final_and_done_commit_once() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    f.c.stateChanged(7, "recording");
+    f.c.finalText(7, "x");
+    f.c.stateChanged(7, "done");
+    CHECK_LOG(f.a.take());
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take(), "status Recording", "clear", "commit x");
+    CHECK(f.c.idle());
+}
+
+void buffered_finalizing_with_pending_stop() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    CHECK(f.c.hotkeyRelease(1000));
+    f.c.stateChanged(7, "finalizing");
+    CHECK_LOG(f.a.take());
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000");
+}
+
+void second_press_in_starting_after_tap() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    CHECK(f.c.hotkeyRelease(100));
+    CHECK(f.c.hotkeyPress(2000, true, true));
+    CHECK_LOG(f.a.take());
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+}
+
+void stale_timer_is_ignored() {
+    Fixture f;
+    f.recording();
+    f.c.timerFired();
+    CHECK_LOG(f.a.take());
+}
+
+void unknown_error_code_is_internal() {
+    Fixture f;
+    f.recording();
+    f.c.error(7, "weird", "m");
+    CHECK_LOG(f.a.take(), "clear", "notify InternalError m");
+}
+
+void full_buffer_keeps_final() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    for (int i = 0; i < 100; ++i) f.c.partial(7, std::to_string(i));
+    f.c.finalText(7, "x");
+    f.c.startReply(7);
+    const Log l = f.a.take();
+    CHECK(l.size() == 65);
+    CHECK(l.size() < 2 || Log(l.end() - 2, l.end()) == Log({"clear", "commit x"}));
 }
 
 } // namespace
@@ -541,10 +669,23 @@ int main() {
         T(stop_failure_for_old_session_is_ignored),
         T(partial_hidden_when_setting_off),
         T(reply_when_idle_cancels_stray_session),
-        T(daemon_left_while_starting_then_reply),
+        T(daemon_left_while_starting_then_start_failure),
         T(new_session_after_finish),
         T(press_while_finalizing_is_swallowed),
         T(call_error_names),
+        T(first_repeat_of_plain_key_is_a_repeat),
+        T(plain_key_lost_release_after_long_gap),
+        T(repeat_gap_is_inclusive),
+        T(modifier_press_while_down_is_new_press),
+        T(other_key_in_starting_cancels),
+        T(other_key_in_starting_with_pending_stop_releases_display),
+        T(focus_lost_in_starting),
+        T(buffered_final_and_done_commit_once),
+        T(buffered_finalizing_with_pending_stop),
+        T(second_press_in_starting_after_tap),
+        T(stale_timer_is_ignored),
+        T(unknown_error_code_is_internal),
+        T(full_buffer_keeps_final),
 #undef T
     };
     for (auto &t : tests) {
