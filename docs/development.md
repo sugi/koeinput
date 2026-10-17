@@ -23,7 +23,7 @@ scripts/dev cargo clippy --workspace --all-targets -- -D warnings
 
 ## Run the daemon in the dev container
 
-The release binaries need `libpulse`, the session bus and the PulseAudio socket, so run them in the dev container, not in podman.
+The release binaries need `libpulse`, the session bus and the PulseAudio socket, so run them directly in the outer dev container (where you work), not inside the `scripts/dev` build container.
 
 ```sh
 HOME=$PWD/work/home KOEINPUT_DATA_DIR=$PWD/data target/release/koeinput-daemon &
