@@ -13,7 +13,7 @@ Done when:
 
 - The addon builds against fcitx5 5.1.12 (Debian 13) and compiles against 5.0.21 (Debian 12).
 - Unit tests of the session logic pass, and a headless fcitx5 test drives the addon against the real daemon (built with `test-hooks`).
-- A local `fcitx5-koeinput` `.deb` installs in a clean Debian 13 container.
+- The addon's files install to the fcitx5 system paths (`cmake --install` into a staging directory shows them).
 - The user checks dictation on the host in WezTerm, Chrome, Firefox, Emacs and Discord (handed over as a checklist; the work does not wait for it).
 
 Out of scope for M2:
@@ -97,7 +97,7 @@ Labels have Japanese translations (gettext domain `fcitx5-koeinput`).
 
 ```
 addon/
-  CMakeLists.txt          project, C++20, -Wall -Wextra, CPack for the local .deb
+  CMakeLists.txt          project, C++20, -Wall -Wextra, install rules
   koeinput.conf.in        addon descriptor
   po/                     fcitx5-koeinput.pot, ja.po
   src/
@@ -182,10 +182,9 @@ Rules from the overall design apply: no blocking calls, no polling, no heavy wor
 - The Debian 13 build image gets CMake, extra-cmake-modules, gettext, dpkg-dev and the fcitx5 development and module packages (including the test modules `testfrontend`, `testim` and `testui`).
 - A second image, `packaging/containers/dev-bookworm.Containerfile`, has the Debian 12 toolchain and fcitx5 5.0.21 development packages, without Rust.
   `scripts/dev` picks it with `KOEINPUT_DEV_IMAGE=bookworm`.
-- `scripts/addon` wraps the common steps: `build`, `test` (unit tests, then the integration test against a `test-hooks` daemon) and `deb`.
+- `scripts/addon` wraps the common steps: `build` and `test` (unit tests, then the integration test against a `test-hooks` daemon).
   The build directory is `target/addon` (or `target/addon-bookworm`), already ignored by git.
-- The local `.deb` comes from CPack: package `fcitx5-koeinput`, version `0.1.0~dev1`, library dependencies from `dpkg-shlibdeps`, plus `fcitx5`.
-  M3 replaces it with a real Debian source package.
+- **Changed 2026-10-18** (controller ruling): no throwaway CPack `.deb`. M3 follows directly and packages the daemon too, which makes the host check much simpler (no daemon run by hand in the dev container). The host check below therefore uses the M3 packages.
 
 ## Testing
 
@@ -208,8 +207,8 @@ Rules from the overall design apply: no blocking calls, no polling, no heavy wor
 
 Written up in `docs/development.md` with exact commands:
 
-1. Start the daemon (in the dev container, as in M1).
-2. Install the `.deb` with `sudo apt install ./target/addon/fcitx5-koeinput_…deb` and restart fcitx5.
-3. Rollback: `sudo apt remove fcitx5-koeinput` and restart fcitx5. Without fcitx5 the keyboard still types, so a broken addon never locks the user out of a terminal.
+1. Install the M3 packages (`koeinput` and `fcitx5-koeinput`), install a model and restart fcitx5 (M3 spec, "Host install").
+2. Rollback: `sudo apt remove fcitx5-koeinput koeinput` and restart fcitx5. Without fcitx5 the keyboard still types, so a broken addon never locks the user out of a terminal.
+3. Also try: click into another window during a session, change the hotkey in the fcitx5 settings, stop the daemon during a session (`systemctl --user stop koeinput`).
 4. In WezTerm, Chrome, Firefox, Emacs and Discord: hold, tap, partial text, Esc, another key, a password field, and Mozc composing.
 5. Note whether key releases arrive (hold mode works), and how each app shows the preedit. These notes feed M4.
