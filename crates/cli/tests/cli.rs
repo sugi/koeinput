@@ -150,6 +150,17 @@ fn manpage_is_hidden_roff_that_documents_the_commands() {
     assert!(plain.contains("--from-file"));
     assert!(plain.contains("--partials"));
     assert!(plain.contains("--final"));
+    for want in [
+        "dict add",
+        "dict remove",
+        "dict list",
+        "editing the file by hand",
+        "DICTIONARY FILE",
+        "a tab",
+        "lines starting with # are ignored",
+    ] {
+        assert!(plain.contains(want), "{want}");
+    }
     assert!(!plain.contains("manpage"));
     for sub in ["listen", "status", "transcribe", "model", "help"] {
         assert!(!plain.contains(&format!("koeinput-{sub}(1)")), "{sub}");
@@ -237,4 +248,63 @@ fn dict_list_prints_entries_and_nothing_for_a_missing_file() {
     run(&["add", "c", "d"]);
     let out = run(&["list"]);
     assert_eq!(String::from_utf8(out.stdout).unwrap(), "a\tb\nc\td\n");
+}
+
+#[test]
+fn model_use_final_refuses_the_main_model() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    let run = |args: &[&str]| koeinput(home.path()).args(args).output().unwrap();
+    let refused = |out: &std::process::Output| {
+        assert!(!out.status.success());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("already the main model"), "{err}");
+    };
+    refused(&run(&["model", "use", "parakeet-ja", "--final"]));
+    assert!(!cfg_path.exists());
+
+    assert!(run(&["model", "use", "zipformer-ja"]).status.success());
+    refused(&run(&["model", "use", "zipformer-ja", "--final"]));
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!cfg.contains("final_model"), "{cfg}");
+    assert!(
+        run(&["model", "use", "parakeet-ja", "--final"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn model_use_errors_name_the_config_file() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    std::fs::create_dir_all(&cfg_path).unwrap();
+    let out = koeinput(home.path())
+        .args(["model", "use", "zipformer-ja"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(&cfg_path.display().to_string()), "{err}");
+}
+
+#[test]
+fn model_list_with_an_invalid_config_warns_and_lists() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+    std::fs::write(&cfg_path, "threads = 0\n").unwrap();
+    let out = koeinput(home.path())
+        .args(["model", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("parakeet-ja"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("threads"), "{err}");
+    assert!(err.contains(&cfg_path.display().to_string()), "{err}");
 }

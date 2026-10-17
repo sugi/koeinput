@@ -26,7 +26,13 @@ fn config(paths: &Paths) -> Result<Config> {
 
 pub fn list(paths: &Paths) -> Result<()> {
     let c = catalog(paths)?;
-    let final_model = config(paths)?.final_model;
+    let final_model = match config(paths) {
+        Ok(cfg) => cfg.final_model,
+        Err(e) => {
+            eprintln!("koeinput: {e:#}; listing without the final model mark");
+            None
+        }
+    };
     for m in &c.models {
         let state = if m.is_installed(&paths.models_dir) {
             "installed"
@@ -102,23 +108,34 @@ fn recognizer<'a>(c: &'a Catalog, id: &str) -> Result<&'a ModelEntry> {
     Ok(m)
 }
 
+fn updating(paths: &Paths) -> String {
+    format!("updating {}", paths.config_file.display())
+}
+
 pub fn use_model(paths: &Paths, id: &str) -> Result<()> {
     let c = catalog(paths)?;
     recognizer(&c, id)?;
-    set_model(&paths.config_file, id)?;
+    set_model(&paths.config_file, id).with_context(|| updating(paths))?;
     println!("model set to {id}; {RESTART}");
     Ok(())
 }
 
 pub fn use_final(paths: &Paths, id: &str) -> Result<()> {
     if id == "none" {
-        set_final_model(&paths.config_file, None)?;
+        set_final_model(&paths.config_file, None).with_context(|| updating(paths))?;
         println!("final model turned off; {RESTART}");
         return Ok(());
     }
     let c = catalog(paths)?;
     let m = recognizer(&c, id)?;
-    set_final_model(&paths.config_file, Some(id))?;
+    let main = config(paths)?.model;
+    let main = main
+        .as_deref()
+        .or_else(|| c.default_model().map(|d| d.id.as_str()));
+    if main == Some(id) {
+        bail!("{id} is already the main model, which also decodes the final text");
+    }
+    set_final_model(&paths.config_file, Some(id)).with_context(|| updating(paths))?;
     println!("final model set to {id}; {RESTART}");
     if !m.is_installed(&paths.models_dir) {
         println!("{id} is not installed yet; install it with `koeinput model install {id}`");

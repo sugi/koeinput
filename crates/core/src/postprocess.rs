@@ -297,6 +297,9 @@ fn stamp(path: &Path) -> Stamp {
     Some((m.modified().ok()?, m.len()))
 }
 
+/// The reload runs under the daemon's lock at Start, so a file beyond this size is not read there.
+const MAX_RELOAD_BYTES: u64 = 1 << 20;
+
 /// Notices changes to the dictionary file by its modification time and length.
 pub struct DictionaryWatch {
     path: std::path::PathBuf,
@@ -315,6 +318,15 @@ impl DictionaryWatch {
     pub fn reload(&mut self) -> Option<PostProcessor> {
         let now = stamp(&self.path);
         if now == self.seen {
+            return None;
+        }
+        if let Some((_, len)) = now
+            && len > MAX_RELOAD_BYTES
+        {
+            tracing::warn!(
+                "{} is larger than 1 MiB; keeping the previous dictionary",
+                self.path.display()
+            );
             return None;
         }
         match load_dictionary(&self.path) {
@@ -503,6 +515,13 @@ mod tests {
     }
 
     #[test]
+    fn add_entry_drops_later_duplicates_of_the_same_wrong_form() {
+        let (_d, p) = dict_file("a\tb\n# c\nx\ty\na\tz\na\tw\n");
+        assert_eq!(add_entry(&p, "a", "q").unwrap(), AddOutcome::Replaced);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "a\tq\n# c\nx\ty\n");
+    }
+
+    #[test]
     fn add_entry_keeps_a_symlinked_dictionary() {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("real.tsv");
@@ -528,5 +547,18 @@ mod tests {
         assert!(w.reload().is_none());
         std::fs::write(&p, "a\tc\n").unwrap();
         assert_eq!(w.reload().expect("created").apply("a"), "c");
+    }
+
+    #[test]
+    fn watch_skips_a_file_over_one_mib_and_checks_again_after_the_next_change() {
+        let (_d, p) = dict_file("a\tb\n");
+        let mut w = DictionaryWatch::new(p.clone());
+        let mut big = String::from("a\tbig\n");
+        big.push_str(&"#".repeat((MAX_RELOAD_BYTES as usize) + 1));
+        std::fs::write(&p, &big).unwrap();
+        assert!(w.reload().is_none());
+        assert!(w.reload().is_none());
+        std::fs::write(&p, "a\tsmall\n").unwrap();
+        assert_eq!(w.reload().expect("shrunk").apply("a"), "small");
     }
 }

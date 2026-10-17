@@ -94,9 +94,11 @@ pub fn load_final(paths: &Paths, cfg: &Config) -> Result<Option<Arc<dyn Recogniz
         return Ok(None);
     };
     if cfg.final_full_max_ms == 0 {
-        return Err(BuildError::Load(format!(
-            "final_full_max_ms = 0 turns off the whole-utterance decode, so {id} would never be used"
-        )));
+        tracing::warn!(
+            model = %id,
+            "not loading the final-stage model: final_full_max_ms is 0"
+        );
+        return Ok(None);
     }
     let catalog = catalog(paths)?;
     let entry = catalog
@@ -222,8 +224,18 @@ mod tests {
         ));
         let e = final_error(&paths, VAD_MODEL_ID, 30_000).to_string();
         assert!(e.contains("not a recognizer"), "{e}");
-        let e = final_error(&paths, "cohere-transcribe", 0).to_string();
-        assert!(e.contains("final_full_max_ms = 0"), "{e}");
+    }
+
+    #[test]
+    fn final_model_is_skipped_when_the_whole_utterance_decode_is_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = test_paths(tmp.path());
+        let cfg = Config {
+            final_model: Some("cohere-transcribe".into()),
+            final_full_max_ms: 0,
+            ..Config::default()
+        };
+        assert!(load_final(&paths, &cfg).unwrap().is_none());
     }
 
     #[test]

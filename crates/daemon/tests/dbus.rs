@@ -55,6 +55,21 @@ fn daemon_command(extra: &[(&str, &str)], config: &str) -> (Command, PathBuf) {
     (cmd, dir)
 }
 
+/// A path the fake loader waits for; the test creates the file when the load may finish.
+fn gate_path() -> PathBuf {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::SeqCst);
+    let gate =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("gate-{}-{n}", std::process::id()));
+    // Process ids repeat across container runs, so a file left by an earlier run must not open this gate.
+    let _ = std::fs::remove_file(&gate);
+    gate
+}
+
+fn open_gate(gate: &std::path::Path) {
+    std::fs::write(gate, b"").unwrap();
+}
+
 async fn start_daemon(extra: &[(&str, &str)]) -> (Daemon, zbus::Connection) {
     start_daemon_with_config(extra, "").await
 }
@@ -276,10 +291,12 @@ async fn second_daemon_does_not_take_over_the_name() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ready_and_model_changes_reach_an_existing_proxy() {
-    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "1000")]).await;
+    let gate = gate_path();
+    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap())]).await;
     let p = Recognizer1Proxy::new(&conn).await.unwrap();
     assert!(!p.ready().await.unwrap());
     assert_eq!(p.model().await.unwrap(), "parakeet-ja");
+    open_gate(&gate);
     wait_ready(&p).await;
     assert_eq!(p.model().await.unwrap(), "fake");
     assert_eq!(p.final_model().await.unwrap(), "");
@@ -337,10 +354,11 @@ async fn final_text_comes_from_the_final_stage_model() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn final_stage_model_loads_after_the_main_model() {
+    let gate = gate_path();
     let (_d, conn) = start_daemon_with_config(
         &[
             ("KOEINPUT_TEST_FINAL_FAKE", "1"),
-            ("KOEINPUT_TEST_FINAL_LOAD_DELAY_MS", "3000"),
+            ("KOEINPUT_TEST_FINAL_LOAD_GATE", gate.to_str().unwrap()),
         ],
         FINAL_CONFIG,
     )
@@ -350,6 +368,7 @@ async fn final_stage_model_loads_after_the_main_model() {
     assert!(!p.final_model_ready().await.unwrap());
     let (_, text) = dictate(&p).await;
     assert!(!text.is_empty() && !text.starts_with('F'), "{text}");
+    open_gate(&gate);
     wait_final_ready(&p).await;
     let (_, text) = dictate(&p).await;
     assert!(text.starts_with('F'), "{text}");
@@ -362,21 +381,77 @@ async fn final_model_load_failure_keeps_main_model() {
     let p = Recognizer1Proxy::new(&conn).await.unwrap();
     wait_ready(&p).await;
     let log_path = d.dir.join("stderr.log");
+    let error_line = |log: &str| {
+        log.lines()
+            .find(|l| l.contains("test final-stage load failure"))
+            .map(str::to_string)
+    };
     let mut log = String::new();
     for _ in 0..100 {
         log = std::fs::read_to_string(&log_path).unwrap_or_default();
-        if log.contains("test final-stage load failure") {
+        if error_line(&log).is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(log.contains("test final-stage load failure"), "{log}");
-    assert!(log.contains("cohere-transcribe"), "{log}");
+    let line = error_line(&log).unwrap_or_else(|| panic!("no error line in\n{log}"));
+    assert!(line.contains("ERROR"), "{line}");
+    assert!(line.contains("cohere-transcribe"), "{line}");
     assert!(p.ready().await.unwrap());
     assert!(!p.final_model_ready().await.unwrap());
     assert_eq!(p.final_model().await.unwrap(), "cohere-transcribe");
     let (_, text) = dictate(&p).await;
     assert!(!text.is_empty() && !text.starts_with('F'), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_started_before_the_final_model_swap_keeps_the_main_model() {
+    let gate = gate_path();
+    let (_d, conn) = start_daemon_with_config(
+        &[
+            ("KOEINPUT_TEST_FINAL_FAKE", "1"),
+            ("KOEINPUT_TEST_FINAL_LOAD_GATE", gate.to_str().unwrap()),
+        ],
+        FINAL_CONFIG,
+    )
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    let mut finals = p.receive_final_text().await.unwrap();
+    let id = p.start(HashMap::new()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    open_gate(&gate);
+    wait_final_ready(&p).await;
+    p.stop(id).await.unwrap();
+    let f = timeout(Duration::from_secs(5), finals.next())
+        .await
+        .expect("no Final")
+        .unwrap();
+    let a = f.args().unwrap();
+    assert_eq!(a.session, id);
+    assert!(!a.text.is_empty() && !a.text.starts_with('F'), "{}", a.text);
+    let (_, text) = dictate(&p).await;
+    assert!(text.starts_with('F'), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_model_equal_to_the_main_model_reuses_it() {
+    let (d, conn) = start_daemon_with_config(
+        &[("KOEINPUT_TEST_FINAL_LOAD_FAIL", "1")],
+        "final_model = \"fake\"\n",
+    )
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    wait_final_ready(&p).await;
+    assert_eq!(p.final_model().await.unwrap(), "fake");
+    let (_, text) = dictate(&p).await;
+    assert!(
+        !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()),
+        "{text}"
+    );
+    let log = std::fs::read_to_string(d.dir.join("stderr.log")).unwrap();
+    assert!(!log.contains("test final-stage load failure"), "{log}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -430,13 +505,22 @@ async fn loader_panic_is_reported_instead_of_loading_forever() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn start_waits_for_a_loading_model() {
-    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "1000")]).await;
+    let gate = gate_path();
+    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap())]).await;
     let p = Recognizer1Proxy::new(&conn).await.unwrap();
-    let t = std::time::Instant::now();
-    let id = p.start(HashMap::new()).await.unwrap();
-    let waited = t.elapsed();
-    assert!(waited >= Duration::from_millis(700), "{waited:?}");
-    assert!(waited < Duration::from_secs(3), "{waited:?}");
+    let starting = {
+        let p = p.clone();
+        tokio::spawn(async move { p.start(HashMap::new()).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!starting.is_finished(), "Start did not wait for the load");
+    assert!(!p.ready().await.unwrap());
+    open_gate(&gate);
+    let id = timeout(Duration::from_secs(3), starting)
+        .await
+        .expect("Start did not return after the load")
+        .unwrap()
+        .unwrap();
     p.cancel(id).await.unwrap();
 }
 

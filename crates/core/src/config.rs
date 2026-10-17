@@ -111,10 +111,31 @@ fn set_value(path: &Path, key: &str, value: &str) -> Result<(), ConfigError> {
     Ok(write_atomic(path, &doc.to_string())?)
 }
 
+/// Follows symlinks to the file that would be written, including links whose target does not exist yet.
+fn resolve_target(path: &Path) -> PathBuf {
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    let mut cur = path.to_path_buf();
+    // Bounded like the kernel's own limit, so a link loop ends.
+    for _ in 0..40 {
+        match std::fs::read_link(&cur) {
+            Ok(target) => {
+                cur = match cur.parent() {
+                    Some(parent) => parent.join(target),
+                    None => target,
+                };
+            }
+            Err(_) => break,
+        }
+    }
+    cur
+}
+
 /// Writes through a temporary file and a rename. A symlinked `path` is resolved first,
 /// because renaming over a symlink would replace it with a regular file.
 pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = &resolve_target(path);
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = parent.unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
@@ -314,6 +335,33 @@ mod tests {
         assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
         assert_eq!(load(&real).unwrap().model.as_deref(), Some("x"));
         assert_eq!(load(&real).unwrap().threads, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_model_writes_through_a_dangling_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("dotfiles/config.toml");
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink("dotfiles/config.toml", &link).unwrap();
+        set_model(&link, "x").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(load(&real).unwrap().model.as_deref(), Some("x"));
+
+        let second = dir.path().join("second.toml");
+        let hop = dir.path().join("hop.toml");
+        std::os::unix::fs::symlink("hop.toml", &second).unwrap();
+        std::os::unix::fs::symlink("elsewhere/c.toml", &hop).unwrap();
+        set_model(&second, "y").unwrap();
+        assert!(std::fs::symlink_metadata(&second).unwrap().is_symlink());
+        assert!(std::fs::symlink_metadata(&hop).unwrap().is_symlink());
+        assert_eq!(
+            load(&dir.path().join("elsewhere/c.toml"))
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("y")
+        );
     }
 
     #[test]

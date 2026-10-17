@@ -158,13 +158,15 @@ Make an installed model the default.
 Use a second model for the final text, while the default model keeps producing the partial text. \fBmodel use \-\-final none\fR turns it off.
 .TP
 \fBdict add\fR \fIWRONG\fR \fIRIGHT\fR
-Add a dictionary entry, or replace the entry for the same \fIWRONG\fR. The daemon picks it up at the next session.
+Add a dictionary entry, or replace the entry for the same \fIWRONG\fR. The daemon picks it up at the next session. Both forms must be non\-empty, so an entry that deletes a word is made by editing the file by hand.
 .TP
 \fBdict remove\fR \fIWRONG\fR
-Remove the entry for \fIWRONG\fR.
+Remove every entry for \fIWRONG\fR.
 .TP
 \fBdict list\fR
-Print the dictionary entries.
+Print the dictionary entries as \fIWRONG\fR, a tab, and \fIRIGHT\fR.
+.SH DICTIONARY FILE
+The dictionary is a UTF\-8 text file with one entry per line: the text as the recognizer writes it (\fIWRONG\fR), a tab, and the text to put in its place (\fIRIGHT\fR). Empty lines and lines starting with # are ignored. A line without a tab is skipped with a warning. When \fIRIGHT\fR is empty, the word is deleted from the result; this can only be written by hand. The longest match wins. \fBdict add\fR and \fBdict remove\fR keep comments and the order of lines. The daemon reads the file again at the next session after it changed; a file larger than 1 MiB is not reloaded.
 .SH NOTES
 Recognition runs locally; no audio leaves the machine. The daemon is started on demand through D\-Bus.
 .SH FILES

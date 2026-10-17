@@ -80,10 +80,15 @@ async fn main() -> anyhow::Result<()> {
             c.handle.cancel();
         }
     }
+    // A Start racing with this must find no model, or it would store a session after the cancel.
     // Otherwise the runtime drop waits for the forwarder thread, which only ends with the session.
-    if let Some(c) = shared.lock().unwrap().current.take() {
-        tracing::info!(session = c.id, "bus connection closed; cancelling");
-        c.handle.cancel();
+    {
+        let mut s = shared.lock().unwrap();
+        s.readiness = Readiness::Missing("shutting down".into());
+        if let Some(c) = s.current.take() {
+            tracing::info!(session = c.id, "bus connection closed; cancelling");
+            c.handle.cancel();
+        }
     }
     // Exiting non-zero lets Restart=on-failure bring the daemon back once the bus is up again.
     anyhow::bail!("session bus connection closed")
@@ -98,7 +103,7 @@ async fn load_model(
 ) {
     let (p, c) = (paths.clone(), cfg.clone());
     let r = tokio::task::spawn_blocking(move || load_for(&p, &c, test_fake)).await;
-    let ready = {
+    let (ready, main_id) = {
         let mut s = shared.lock().unwrap();
         match r {
             Ok(Ok((engine, id))) => {
@@ -120,7 +125,7 @@ async fn load_model(
             }
         }
         s.load_finished.send_replace(true);
-        matches!(s.readiness, Readiness::Ready(_))
+        (matches!(s.readiness, Readiness::Ready(_)), s.model.clone())
     };
     // Proxies cache properties, so clients only see the new values through PropertiesChanged.
     // Model goes first so that a client reacting to Ready already has the right Model.
@@ -141,10 +146,16 @@ async fn load_model(
         return;
     };
     // Loaded only after the main model, so dictation can start while this large model loads.
-    tracing::info!(model = %id, "loading the final-stage model");
-    let r = tokio::task::spawn_blocking(move || load_final_for(&paths, &cfg, test_fake)).await;
+    let r = if id == main_id {
+        tracing::info!(model = %id, "the final-stage model is the main model; using it for both");
+        Ok(Ok(None))
+    } else {
+        tracing::info!(model = %id, "loading the final-stage model");
+        tokio::task::spawn_blocking(move || load_final_for(&paths, &cfg, test_fake)).await
+    };
     let rec = match r {
-        Ok(Ok(Some(rec))) => rec,
+        Ok(Ok(Some(rec))) => Some(rec),
+        Ok(Ok(None)) if id == main_id => None,
         Ok(Ok(None)) => return,
         Ok(Err(e)) => {
             tracing::error!(model = %id, "final-stage model: {e}; using the main model only");
@@ -161,7 +172,7 @@ async fn load_model(
             return;
         };
         let engine = Engine {
-            final_rec: Some(rec),
+            final_rec: Some(rec.unwrap_or_else(|| engine.rec.clone())),
             ..Engine::clone(engine)
         };
         s.readiness = Readiness::Ready(Arc::new(engine));
@@ -190,6 +201,7 @@ fn load_for(paths: &Paths, cfg: &Config, test_fake: bool) -> Result<(Engine, Str
         if std::env::var("KOEINPUT_TEST_LOAD_PANIC").as_deref() == Ok("1") {
             panic!("test loader panic");
         }
+        service::test_gate("KOEINPUT_TEST_LOAD_GATE");
         if let Some(d) = service::test_delay("KOEINPUT_TEST_LOAD_DELAY_MS") {
             std::thread::sleep(d);
         }
@@ -221,6 +233,7 @@ fn load_final_for(
 ) -> Result<Option<Arc<dyn Recognizer>>, BuildError> {
     #[cfg(feature = "test-hooks")]
     if test_fake {
+        service::test_gate("KOEINPUT_TEST_FINAL_LOAD_GATE");
         if let Some(d) = service::test_delay("KOEINPUT_TEST_FINAL_LOAD_DELAY_MS") {
             std::thread::sleep(d);
         }

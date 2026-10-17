@@ -220,6 +220,17 @@ pub fn test_delay(var: &str) -> Option<std::time::Duration> {
         .map(std::time::Duration::from_millis)
 }
 
+/// Blocks until the file named by `var` exists, so a test decides when a load may finish.
+#[cfg(feature = "test-hooks")]
+pub fn test_gate(var: &str) {
+    let Ok(path) = std::env::var(var) else {
+        return;
+    };
+    while !std::path::Path::new(&path).exists() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 async fn caller_present(conn: &Connection, owner: &UniqueName<'static>) -> zbus::Result<bool> {
     let dbus = zbus::fdo::DBusProxy::new(conn).await?;
     Ok(dbus.name_has_owner(BusName::Unique(owner.clone())).await?)

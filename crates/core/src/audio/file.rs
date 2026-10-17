@@ -2,6 +2,7 @@ use super::AudioError;
 use crate::SAMPLE_RATE;
 use std::path::Path;
 
+/// Every error message starts with the path.
 pub fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, AudioError> {
     let mut r = hound::WavReader::open(path).map_err(|e| match e {
         hound::Error::IoError(io) => AudioError::Io(format!("{}: {io}", path.display())),
@@ -17,7 +18,7 @@ pub fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, AudioError> {
                 .collect::<Result<_, _>>()
         }
     }
-    .map_err(|e| AudioError::Format(e.to_string()))?;
+    .map_err(|e| AudioError::Format(format!("{}: {e}", path.display())))?;
     let ch = spec.channels.max(1) as usize;
     let mono: Vec<f32> = interleaved
         .chunks(ch)
@@ -28,7 +29,11 @@ pub fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, AudioError> {
     }
     let rs = sherpa_onnx::LinearResampler::create(spec.sample_rate as i32, SAMPLE_RATE as i32)
         .ok_or_else(|| {
-            AudioError::Format(format!("cannot resample from {} Hz", spec.sample_rate))
+            AudioError::Format(format!(
+                "{}: cannot resample from {} Hz",
+                path.display(),
+                spec.sample_rate
+            ))
         })?;
     Ok(rs.resample(&mono, true))
 }

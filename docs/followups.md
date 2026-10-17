@@ -15,9 +15,6 @@ Each item names the milestone it belongs to.
   - Fillers are also removed inside longer words; judge this with real transcripts.
 
 - Model download: a download that stalls mid-body hangs `koeinput model install`. There is no idle timeout, and ureq 3 has no per-read timeout.
-- Daemon: a `Start` that arrives at the exact moment the bus drops can store a session after the shutdown cancel; mark the shared state as shutting down under the same lock so such a `Start` is refused.
-- Config: `koeinput model use` errors do not name the config file; `set_model` on a dangling symlink replaces the link with a regular file.
-- CLI: `transcribe` decides whether to add the file name by a substring check, which can drop the name when a very short path appears inside an unrelated message.
 
 ## M2 (fcitx5 addon)
 
@@ -35,6 +32,14 @@ Each item names the milestone it belongs to.
 ## Done
 
 ### 2026-10-18
+
+- Daemon and CLI follow-ups (M4):
+  - A `Start` racing with the bus drop is refused: shutdown marks the state as shutting down under the same lock as the cancel.
+  - `koeinput model use` errors name the config file; `set_model` writes through a dangling symlink to the target path.
+  - `transcribe` failure lines no longer use a substring check: audio errors always start with the path and other errors get it added.
+  - Before-ready D-Bus tests use a load gate file instead of a timing window; `koeinput model use ID --final` refuses the main model and the daemon reuses the main recognizer when both ids are equal.
+  - `koeinput status` says "not loaded yet or failed" for a final model that is not ready; `model list` warns on an invalid config instead of failing; `final_full_max_ms = 0` skips the final model with a warning.
+  - The dictionary reload skips files over 1 MiB; the man page documents `dict` and the file format.
 
 - Session and engine tests: recognizer errors during finalize and on a partial tick, `max_length` reached during the tail, `SessionConfig::from_config`, VAD factory failure, and the 2 s no-audio timeout.
 - Validate the model catalog when it is loaded: each `id` and `archive_root` must be a single plain path component, `files` values must be relative paths without `..`, `format` must be `file` or `tar.bz2`, and `sha256` must be 64 hex characters. Before this, an empty `id` made `koeinput model remove` delete the whole models directory. (M3)

@@ -24,15 +24,17 @@ pub fn status() -> Result<()> {
         let ready = p.ready().await.context(NOT_RUNNING)?;
         println!("ready: {}", if ready { "yes" } else { "no" });
         println!("model: {}", p.model().await?);
-        // A daemon started before an upgrade lacks these properties; it has no final-stage model.
-        let final_model = p.final_model().await.unwrap_or_default();
-        let final_ready = p.final_model_ready().await.unwrap_or(false);
-        if let Some(line) = final_model_line(&final_model, final_ready) {
+        if let Some(line) = final_model_status(p.final_model().await, p.final_model_ready().await) {
             println!("{line}");
         }
         println!("version: {}", p.version().await?);
         Ok(())
     })
+}
+
+/// A daemon started before an upgrade lacks the properties; it has no final-stage model.
+fn final_model_status(model: zbus::Result<String>, ready: zbus::Result<bool>) -> Option<String> {
+    final_model_line(&model.unwrap_or_default(), ready.unwrap_or(false))
 }
 
 fn final_model_line(id: &str, ready: bool) -> Option<String> {
@@ -42,7 +44,7 @@ fn final_model_line(id: &str, ready: bool) -> Option<String> {
     let state = if ready {
         "ready"
     } else {
-        "not loaded, see journalctl --user -u koeinput"
+        "not loaded yet or failed, see journalctl --user -u koeinput"
     };
     Some(format!("final model: {id} ({state})"))
 }
@@ -163,7 +165,20 @@ mod tests {
         );
         assert_eq!(
             final_model_line("cohere-transcribe", false).as_deref(),
-            Some("final model: cohere-transcribe (not loaded, see journalctl --user -u koeinput)")
+            Some(
+                "final model: cohere-transcribe (not loaded yet or failed, see journalctl --user -u koeinput)"
+            )
         );
+    }
+
+    #[test]
+    fn status_without_the_final_model_properties_prints_no_line() {
+        let missing = || zbus::Error::InterfaceNotFound;
+        assert_eq!(final_model_status(Err(missing()), Err(missing())), None);
+        assert_eq!(
+            final_model_status(Ok("m".into()), Err(missing())).as_deref(),
+            Some("final model: m (not loaded yet or failed, see journalctl --user -u koeinput)")
+        );
+        assert_eq!(final_model_status(Ok(String::new()), Ok(true)), None);
     }
 }
