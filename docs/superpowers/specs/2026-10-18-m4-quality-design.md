@@ -40,7 +40,7 @@ Longer recordings fall back to the current segment join. Partial results stay as
 - Config key `final_model` (a catalog id, empty by default). The daemon loads it next to the main model; `Ready` is true when both are loaded.
 - `koeinput model use ID --final` sets it (and installs nothing); `koeinput model use --final none` clears it.
 - Two read-only D-Bus properties are added (backward compatible): `FinalModel` (s, the configured id or empty) and `FinalModelReady` (b). `koeinput status` shows both models.
-- The final-stage model always decodes the whole utterance (section 1 limit applies; over the limit, its segment decodes are joined).
+- The final-stage model decodes the whole utterance (section 1). Over the section 1 limit, the main model's segment join is used, because decoding every segment again with the slower model would delay the final text by several seconds.
 - The spike's best candidate is Cohere Transcribe (`cohere-transcribe`, CER 21% vs 28%, final p90 about 2.7 s, 3.8 GB). It is documented as the recommended choice; the user decides.
 - If the final-stage model fails to load, the daemon logs it and works with the main model only (`Ready` is true, `FinalModelReady` is false, and `status` points to the journal).
 
