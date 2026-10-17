@@ -5,6 +5,10 @@ No speech recognition model is in the package. Install one once per user:
 
   koeinput model install parakeet-ja
 
+If the daemon was already running when you installed the model, run
+`systemctl --user restart koeinput`; the daemon looks for the model only when
+it starts.
+
 `koeinput model list` shows the available models and the license of each;
 models are downloaded from their publishers and are not covered by
 /usr/share/doc/koeinput/copyright.

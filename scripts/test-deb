@@ -172,7 +172,8 @@ user_main() {
     ! grep -q 'Cannot start the KoeInput daemon' fcitx5.log || fail "the addon could not start the daemon"
     grep -q 'no model installed' fcitx5.log || fail "the daemon started by the addon did not report the missing model"
     ok "addon loaded, and it started the daemon through D-Bus activation"
-  elif grep -v 'Override Enabled Addons' fcitx5.log | grep -q koeinput || [ "$code" -ge 128 ]; then
+  elif grep -v 'Override Enabled Addons' fcitx5.log | grep -q koeinput || [ "$code" -ge 128 ] ||
+    { [ "$alive" = no ] && [ "$code" -ne 0 ]; }; then
     fail "fcitx5 did not finish loading the addon"
   else
     warn "fcitx5 could not run headless here, so the addon load was not checked (see the fcitx5 lines above)"

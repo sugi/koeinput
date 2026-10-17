@@ -59,8 +59,9 @@ HOME=$PWD/work/home KOEINPUT_DATA_DIR=$PWD/data target/release/koeinput-daemon &
 sleep 3
 target/release/koeinput status
 HOME=$PWD/work/home KOEINPUT_DATA_DIR=$PWD/data target/release/koeinput transcribe --partials <file.wav>...
-kill %1
 ```
+
+Stop the daemon in that shell (Ctrl-C), or run `pkill -x koeinput-daemon`.
 
 `status` should print `ready: yes` and `model: parakeet-ja`. `transcribe` runs the recognizer inside the CLI process, not through the daemon.
 
@@ -240,7 +241,9 @@ scripts/test-deb testing
 
 Then, in a terminal on the host, in the repository directory (`~/works/git/nemui/koeinput`):
 
-1. If you started `koeinput-daemon` by hand in the dev container, stop it (`kill %1` in that shell). While it runs, it holds the D-Bus name and the installed daemon cannot start.
+0. Run `sudo apt update && sudo apt upgrade` first: the testing build needs the current libc6 and fcitx5. Or use the trixie build (`target/deb/trixie/`).
+
+1. If you started `koeinput-daemon` by hand in the dev container, stop it in that shell (Ctrl-C), or run `pkill -x koeinput-daemon`. While it runs, it holds the D-Bus name and the installed daemon cannot start.
 2. Install the two packages:
 
    ```sh
@@ -255,6 +258,8 @@ Then, in a terminal on the host, in the repository directory (`~/works/git/nemui
    ```
 
    The VAD model is downloaded with it. To download both, run `koeinput model install parakeet-ja` instead.
+
+   If the daemon was already running when you installed the model, run `systemctl --user restart koeinput`. The daemon looks for the model only when it starts.
 4. Restart fcitx5 so that it loads the addon. Open System Settings, then Keyboard, then Virtual Keyboard (Plasma 6; on Plasma 5 it is Input Devices, then Virtual Keyboard). Choose None and apply, then choose Fcitx 5 and apply again. The keyboard keeps typing while fcitx5 is down.
 5. The addon starts the daemon. Check it:
 
@@ -262,9 +267,20 @@ Then, in a terminal on the host, in the repository directory (`~/works/git/nemui
    koeinput status
    ```
 
-   It prints `ready: yes` and `model: parakeet-ja`. The model takes a few seconds to load; until then it prints `ready: no`.
+   It prints `ready: yes` and `model: parakeet-ja`. The model takes a few seconds to load; until then it prints `ready: no`. If it keeps printing `ready: no` together with the install hint, the model step was skipped (or the daemon needs the restart from step 3).
 
 Then go through the [host check](#host-check).
+
+### Upgrade
+
+Nothing restarts by itself after an upgrade. Install the new packages the same way as in step 2, then:
+
+```sh
+sudo apt install ./target/deb/testing/koeinput_<version>_amd64.deb ./target/deb/testing/fcitx5-koeinput_<version>_amd64.deb
+systemctl --user restart koeinput
+```
+
+Restart fcitx5 as in step 4 when fcitx5-koeinput changed. The running daemon and the loaded addon keep the old code until you restart them.
 
 ### Rollback
 
@@ -283,7 +299,7 @@ The models stay in `~/.local/share/koeinput/models/`. Remove them with `koeinput
 journalctl --user -u koeinput
 ```
 
-The daemon logs there when D-Bus starts it through systemd. It never logs recognized text. If a line shows as `[… blob data]`, add `--all`: the daemon's log lines contain color codes (see [followups.md](followups.md)).
+The daemon logs there when D-Bus starts it through systemd. It never logs recognized text.
 
 The addon's messages are in fcitx5's output. When KWin starts fcitx5, look in the user journal: `journalctl --user -b | grep -i koeinput`.
 

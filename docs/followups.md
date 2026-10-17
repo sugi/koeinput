@@ -15,7 +15,6 @@ Each item names the milestone it belongs to.
 - Config: `koeinput model use` errors do not name the config file; `set_model` on a dangling symlink replaces the link with a regular file.
 - CLI: `transcribe` decides whether to add the file name by a substring check, which can drop the name when a very short path appears inside an unrelated message.
 - Addon and daemon: a `Stop` or `Cancel` that the addon sends in the few milliseconds between the daemon losing its bus name and the addon seeing `NameOwnerChanged` can make the bus start a new daemon (D-Bus activation). Such calls should carry the `NO_AUTO_START` flag, but fcitx5's D-Bus API has no portable way to set it.
-- Daemon log: the log lines contain ANSI color codes even when stderr is not a terminal, so the journal stores them, and `journalctl` may show such lines as `[… blob data]` unless `--all` is given. Use colors only when stderr is a terminal.
 
 ## M5 (formats and release)
 
