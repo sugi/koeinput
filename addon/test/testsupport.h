@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <sys/wait.h>
@@ -87,18 +88,33 @@ public:
     }
 
     explicit DaemonProcess(std::vector<std::pair<std::string, std::string>> extraEnv = {}) {
+        if (!binary()) die("KOEINPUT_TEST_DAEMON is not set");
+        // Without it, dbus-send could autolaunch a bus or reach the user's session bus.
+        if (!std::getenv("DBUS_SESSION_BUS_ADDRESS")) {
+            die("DBUS_SESSION_BUS_ADDRESS is not set; run the test under dbus-run-session");
+        }
         char dirTemplate[] = "/tmp/koeinput-test-XXXXXX";
-        dir_ = mkdtemp(dirTemplate);
+        if (!mkdtemp(dirTemplate)) die(std::string("mkdtemp failed: ") + std::strerror(errno));
+        dir_ = dirTemplate;
+
+        std::map<std::string, std::string> overrides{
+            {"HOME", dir_},
+            {"XDG_CONFIG_HOME", dir_ + "/config"},
+            {"XDG_DATA_HOME", dir_ + "/data"},
+            {"KOEINPUT_TEST_FAKE", "1"},
+        };
+        for (auto &[k, v] : extraEnv) overrides[k] = v;
+        // getenv returns the first match, so an inherited key would win over an appended one.
         std::vector<std::string> env;
-        for (char **e = environ; *e; ++e) env.emplace_back(*e);
-        env.push_back("HOME=" + dir_);
-        env.push_back("XDG_CONFIG_HOME=" + dir_ + "/config");
-        env.push_back("XDG_DATA_HOME=" + dir_ + "/data");
-        env.push_back("KOEINPUT_TEST_FAKE=1");
-        for (auto &[k, v] : extraEnv) env.push_back(k + "=" + v);
+        for (char **e = environ; *e; ++e) {
+            std::string entry = *e;
+            if (!overrides.count(entry.substr(0, entry.find('=')))) env.push_back(std::move(entry));
+        }
+        for (auto &[k, v] : overrides) env.push_back(k + "=" + v);
         std::vector<char *> envp;
         for (auto &s : env) envp.push_back(s.data());
         envp.push_back(nullptr);
+
         std::string log = dir_ + "/stderr.log";
         pid_ = fork();
         if (pid_ == 0) {
@@ -106,8 +122,11 @@ public:
             (void)f;
             char *argv[] = {const_cast<char *>(binary()), nullptr};
             execve(argv[0], argv, envp.data());
+            std::fprintf(stderr, "execve %s: %s\n", argv[0], std::strerror(errno));
+            std::fflush(stderr);
             _exit(127);
         }
+        if (pid_ < 0) die(std::string("fork failed: ") + std::strerror(errno));
         waitUntilReady();
     }
 
@@ -124,6 +143,11 @@ public:
     }
 
 private:
+    [[noreturn]] static void die(const std::string &message) {
+        std::fprintf(stderr, "DaemonProcess: %s\n", message.c_str());
+        std::abort();
+    }
+
     static bool ownerPresent() {
         return std::system("dbus-send --session --print-reply --dest=org.freedesktop.DBus "
                            "/org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner "
@@ -136,6 +160,11 @@ private:
             "org.freedesktop.DBus.Properties.Get string:org.nemui.KoeInput.Recognizer1 "
             "string:Ready 2>/dev/null";
         for (int i = 0; i < 200; ++i) {
+            int status = 0;
+            if (waitpid(pid_, &status, WNOHANG) == pid_) {
+                pid_ = -1;
+                die("daemon exited before it was ready; log in " + dir_ + "/stderr.log");
+            }
             if (FILE *p = popen(cmd, "r")) {
                 char buf[512];
                 std::string out;
@@ -149,8 +178,7 @@ private:
             }
             usleep(50000);
         }
-        std::fprintf(stderr, "daemon did not become ready; log in %s\n", dir_.c_str());
-        std::abort();
+        die("daemon did not become ready; log in " + dir_ + "/stderr.log");
     }
 
 public:
