@@ -612,6 +612,95 @@ int main() {
                       displayClear(ic());
                       KI_CHECK(!send("space", false));
                       KI_CHECK(!send("space", true));
+                  })
+            // A press without the Alt state shows that Alt_R is not held any more.
+            .then(0, "shared modifier, lost release: press Alt_R", [&] { KI_CHECK(send("Alt_R", false)); })
+            .then(300, "shared modifier, lost release: esc without the Alt state cancels",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(1100, "shared modifier, lost release: Alt+space starts a new session",
+                  [&] {
+                      KI_CHECK(send("Alt+space", false));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(1400, "shared modifier, lost release: release", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "shared modifier, lost release: committed",
+                  [&] {
+                      committed(17);
+                      displayClear(ic());
+                  })
+            .then(0, "chord timeout: press Alt_R", [&] { KI_CHECK(send("Alt_R", false)); })
+            .then(700, "chord timeout: Alt+space", [&] { KI_CHECK(send("Alt+space", false)); })
+            .then(700, "chord timeout: release Alt_R", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
+            .then(1200, "chord timeout: a bare space after a long gap is an ordinary key",
+                  [&] {
+                      KI_CHECK(!send("space", false));
+                      KI_CHECK(!send("space", true));
+                  })
+            .then(1500, "chord timeout: committed",
+                  [&] {
+                      committed(18);
+                      displayClear(ic());
+                  })
+            // A plain first hotkey has no modifier state: it counts as held while it repeats.
+            .then(0, "plain first hotkey: press Control+space",
+                  [&] {
+                      setHotkeys("Control+space", "Alt_R");
+                      KI_CHECK(send("Control+space", false));
+                  })
+            .then(500, "plain first hotkey: Alt_R within the repeat gap is a chord",
+                  [&] {
+                      KI_CHECK(send("Alt_R", false));
+                      KI_CHECK(send("Alt+Alt_R", true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(900, "plain first hotkey: release space", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "plain first hotkey: committed",
+                  [&] {
+                      committed(19);
+                      displayClear(ic());
+                  })
+            .then(0, "plain first hotkey, lost release: press Control+space",
+                  [&] { KI_CHECK(send("Control+space", false)); })
+            .then(300, "plain first hotkey, lost release: esc cancels",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(1100, "plain first hotkey, lost release: Alt_R after the gap starts a new session",
+                  [&] {
+                      KI_CHECK(send("Alt_R", false));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(1400, "plain first hotkey, lost release: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
+            .then(1500, "plain first hotkey, lost release: committed",
+                  [&] {
+                      committed(20);
+                      displayClear(ic());
+                  })
+            // AltGr is held as Mod5: a press without it, even within a second, shows it is up.
+            .then(0, "altgr evidence: press ISO_Level3_Shift",
+                  [&] {
+                      setHotkeys("ISO_Level3_Shift", "Alt_R");
+                      KI_CHECK(send("ISO_Level3_Shift", false));
+                  })
+            .then(300, "altgr evidence: esc without Mod5 cancels",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(300, "altgr evidence: Alt_R within the repeat gap starts a new session",
+                  [&] {
+                      KI_CHECK(send("Alt_R", false));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(1400, "altgr evidence: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
+            .then(1500, "altgr evidence: committed",
+                  [&] {
+                      committed(21);
+                      displayClear(ic());
                       setHotkey("Alt_R");
                   })
             .then(0, "daemon killed: press",
@@ -622,7 +711,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(16);
+                      committed(21);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -632,7 +721,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(17);
+                committed(22);
                 displayClear(ic());
             });
     } else {

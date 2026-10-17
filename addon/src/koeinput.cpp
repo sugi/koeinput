@@ -64,6 +64,13 @@ bool isModifierKey(const fcitx::Key &key) {
            key.sym() == FcitxKey_Mode_switch;
 }
 
+// The state a held modifier key adds to later key events. keySymToStates
+// knows nothing about the level and group shifts, which XKB binds to Mod5.
+fcitx::KeyStates modifierStates(fcitx::KeySym sym) {
+    if (sym == FcitxKey_ISO_Level3_Shift || sym == FcitxKey_Mode_switch) return fcitx::KeyState::Mod5;
+    return fcitx::Key::keySymToStates(sym);
+}
+
 } // namespace
 
 KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
@@ -170,10 +177,11 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
 // The stored hotkey's release may have been lost (some X11 paths drop
 // releases), so a chord needs evidence that the key is still down: a held
 // modifier shows in the states of later keys; a plain key auto-repeats.
-bool KoeInputAddon::hotkeyHeld(const fcitx::Key &key, uint64_t nowMs) const {
+// The raw key keeps every state bit; the normalized one may not.
+bool KoeInputAddon::hotkeyHeld(const fcitx::Key &rawKey, uint64_t nowMs) const {
     if (hotkey_.empty()) return false;
-    const fcitx::KeyStates modifier = fcitx::Key::keySymToStates(hotkey_.sym);
-    if (modifier) return (key.states() & modifier) == modifier;
+    const fcitx::KeyStates modifier = modifierStates(hotkey_.sym);
+    if (modifier) return (rawKey.states() & modifier) == modifier;
     return nowMs - hotkey_.pressMs <= Controller::kRepeatGapMs;
 }
 
@@ -191,9 +199,11 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
             return;
         }
         const auto &hotkeys = *config_.hotkey;
+        // A modifier hotkey's release pairs by sym whatever the states, since
+        // the stored press may already be dropped (AltGr has no isReleaseOfModifier).
         const bool modifierRelease =
             std::any_of(hotkeys.begin(), hotkeys.end(), [&](const fcitx::Key &k) {
-                return k.isModifier() && key.isReleaseOfModifier(k);
+                return isModifierKey(k) && (key.sym() == k.sym() || key.isReleaseOfModifier(k));
             });
         if (sameKey || modifierRelease || key.checkKeyList(hotkeys)) {
             hotkey_ = {};
@@ -211,6 +221,12 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     // the release lost, so the press is an ordinary key again.
     // key() is normalized and has lost the Repeat state; rawKey() keeps it.
     const bool flagged = event.rawKey().states().test(fcitx::KeyState::Repeat);
+    // Frontends report the state before the press, so a held modifier hotkey
+    // shows in every later press. A press without it means the release was lost.
+    if (!sameKey && !hotkey_.empty()) {
+        const fcitx::KeyStates modifier = modifierStates(hotkey_.sym);
+        if (modifier && (event.rawKey().states() & modifier) != modifier) hotkey_ = {};
+    }
     if (chordKey != chord_.end()) {
         // A chord key repeats like the hotkey below (Alt_R released first, the
         // chord's space still down); after a longer gap its release was lost.
@@ -224,7 +240,7 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     const bool repeat = sameKey && (flagged || now - hotkey_.pressMs <= Controller::kRepeatGapMs);
     if (repeat || key.checkKeyList(*config_.hotkey)) {
         // Another configured hotkey while the first is still down is a chord.
-        if (!sameKey && hotkeyHeld(key, now)) {
+        if (!sameKey && hotkeyHeld(event.rawKey(), now)) {
             chord_.push_back({key.code(), key.sym(), now});
             event.filterAndAccept();
             return;
