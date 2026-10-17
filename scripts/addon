@@ -1,0 +1,26 @@
+#!/bin/sh
+# Builds, tests or packages the fcitx5 addon in the build container.
+# Usage: scripts/addon build|test|deb   (KOEINPUT_DEV_IMAGE=bookworm for the Debian 12 check)
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+name=${KOEINPUT_DEV_IMAGE:-trixie}
+build=target/addon
+[ "$name" = trixie ] || build="target/addon-$name"
+configure="cmake -S addon -B $build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr"
+compile="cmake --build $build -j8"
+case "${1:-}" in
+  build)
+    "$root/scripts/dev" sh -c "$configure && $compile" ;;
+  test)
+    daemon=
+    if [ "$name" = trixie ]; then
+      "$root/scripts/dev" cargo build -p koeinput-daemon --features test-hooks
+      daemon=/src/target/debug/koeinput-daemon
+    fi
+    "$root/scripts/dev" sh -c "$configure && $compile && KOEINPUT_TEST_DAEMON=$daemon dbus-run-session -- ctest --test-dir $build --output-on-failure" ;;
+  deb)
+    "$root/scripts/dev" sh -c "$configure && $compile && cd $build && cpack -G DEB" ;;
+  *)
+    echo "usage: scripts/addon build|test|deb" >&2
+    exit 2 ;;
+esac

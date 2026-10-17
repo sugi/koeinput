@@ -1,0 +1,18 @@
+[Addon]
+Name=KoeInput
+Name[ja]=KoeInput（声インプット）
+Comment=Push-to-talk dictation through the KoeInput daemon
+Comment[ja]=キーを押して話すと、KoeInput デーモンで文字にして入力します
+Category=Module
+Version=@PROJECT_VERSION@
+Library=libkoeinput
+Type=SharedLibrary
+OnDemand=False
+Configurable=True
+
+[Addon/Dependencies]
+0=core:5.0.0
+1=dbus
+
+[Addon/OptionalDependencies]
+0=notifications
