@@ -26,7 +26,14 @@ pub fn status() -> Result<()> {
 }
 
 pub fn run() -> Result<()> {
-    runtime()?.block_on(async {
+    let rt = runtime()?;
+    let result = rt.block_on(listen());
+    // The stdin read runs on a blocking-pool thread that only ends on input; dropping the runtime would wait for it.
+    rt.shutdown_background();
+    result
+}
+
+async fn listen() -> Result<()> {
         let conn = zbus::Connection::session().await.context("no session bus")?;
         let p = Recognizer1Proxy::new(&conn).await?;
         let ready = p.ready().await.context(NOT_RUNNING)?;
@@ -57,6 +64,7 @@ pub fn run() -> Result<()> {
                         None => match p.start(HashMap::new()).await {
                             Ok(id) => {
                                 current = Some(id);
+                                stopped_at = None;
                                 println!("[preparing]");
                             }
                             Err(e) => println!("cannot start: {e}"),
@@ -77,7 +85,9 @@ pub fn run() -> Result<()> {
                     }
                     if Some(a.session) == current && matches!(a.state.as_str(), "done" | "cancelled" | "error") {
                         ended = current.take();
-                        stopped_at = None;
+                        if a.state != "done" {
+                            stopped_at = None;
+                        }
                     }
                 }
                 Some(s) = partials.next() => {
@@ -108,5 +118,4 @@ pub fn run() -> Result<()> {
             let _ = p.cancel(id).await;
         }
         Ok(())
-    })
 }

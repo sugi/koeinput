@@ -17,6 +17,8 @@ pub enum Source {
     Samples(Vec<f32>),
     #[cfg(any(test, feature = "test-hooks"))]
     Generator { level: f32 },
+    #[cfg(test)]
+    StallingGenerator { level: f32, chunks: usize },
 }
 
 pub type VadFactory = Arc<dyn Fn() -> Result<Box<dyn Vad>, String> + Send + Sync>;
@@ -84,7 +86,11 @@ impl Engine {
             }
             #[cfg(any(test, feature = "test-hooks"))]
             Source::Generator { level } => {
-                return self.run_live(&mut session, LiveSource::Generator(level), &send, &cmd);
+                return self.run_live(&mut session, LiveSource::Generator(level, None), &send, &cmd);
+            }
+            #[cfg(test)]
+            Source::StallingGenerator { level, chunks } => {
+                return self.run_live(&mut session, LiveSource::Generator(level, Some(chunks)), &send, &cmd);
             }
         };
         for chunk in samples.chunks(CHUNK) {
@@ -107,7 +113,7 @@ fn fail(code: &str, message: String) -> Vec<Event> {
 enum LiveSource {
     Mic(Option<String>),
     #[cfg(any(test, feature = "test-hooks"))]
-    Generator(f32),
+    Generator(f32, Option<usize>),
 }
 
 enum Running {
@@ -121,11 +127,17 @@ impl Running {
         match src {
             LiveSource::Mic(name) => Running::Mic(Capture::start(name, tx)),
             #[cfg(any(test, feature = "test-hooks"))]
-            LiveSource::Generator(level) => {
+            LiveSource::Generator(level, limit) => {
                 let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let flag = stop.clone();
                 std::thread::spawn(move || {
+                    let mut sent = 0;
                     while !flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        if limit.is_some_and(|n| sent >= n) {
+                            std::thread::sleep(Duration::from_millis(20));
+                            continue;
+                        }
+                        sent += 1;
                         if tx.send(CaptureMsg::Audio(vec![level; CHUNK])).is_err() {
                             return;
                         }
@@ -225,7 +237,11 @@ impl Engine {
                     }
                 },
                 default(AUDIO_TIMEOUT) => {
-                    let events = fail_and_finish(session, "audio", "no audio for 2 s".into());
+                    let events = if stop_requested {
+                        session.end_of_audio()
+                    } else {
+                        fail_and_finish(session, "audio", "no audio for 2 s".into())
+                    };
                     forward(session, &mut running, events);
                 },
             }
@@ -285,6 +301,16 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         h.cancel();
         assert_eq!(collect(&h).last(), Some(&Event::State(State::Cancelled)));
+    }
+
+    #[test]
+    fn stall_after_stop_still_delivers_final() {
+        let h = engine().start(Source::StallingGenerator { level: 0.1, chunks: 40 });
+        std::thread::sleep(Duration::from_millis(1200));
+        h.stop();
+        let ev = collect(&h);
+        assert!(ev.iter().any(|e| matches!(e, Event::Final(t) if !t.is_empty())), "{ev:?}");
+        assert_eq!(ev.last(), Some(&Event::State(State::Done)), "{ev:?}");
     }
 
     #[test]

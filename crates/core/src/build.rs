@@ -28,7 +28,7 @@ pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), Buil
     let vad_entry = catalog.get(VAD_MODEL_ID).ok_or_else(|| BuildError::Catalog("no silero-vad entry".into()))?;
     for e in [entry, vad_entry] {
         if !e.is_installed(&paths.models_dir) {
-            return Err(BuildError::NoModel { id: e.id.clone(), hint: format!("koeinput model install {}", entry.id) });
+            return Err(BuildError::NoModel { id: e.id.clone(), hint: format!("koeinput model install {}", e.id) });
         }
     }
     let dict_path = cfg.dictionary.clone().unwrap_or_else(|| paths.dictionary_file.clone());
@@ -59,7 +59,34 @@ fn effective_threads(threads: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::effective_threads;
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn missing_vad_hint_names_the_vad_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            config_file: tmp.path().join("config.toml"),
+            dictionary_file: tmp.path().join("dictionary.toml"),
+            models_dir: tmp.path().join("models"),
+            catalog_file: Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/models.toml")).into(),
+        };
+        let cfg = Config::default();
+        let missing = |p: &Paths| match load_engine(p, &cfg) {
+            Err(BuildError::NoModel { id, hint }) => (id, hint),
+            other => panic!("expected NoModel, got {:?}", other.err()),
+        };
+        assert_eq!(missing(&paths), ("parakeet-ja".into(), "koeinput model install parakeet-ja".into()));
+
+        let catalog = Catalog::load(&paths.catalog_file).unwrap();
+        let rec = catalog.default_model().unwrap();
+        let dir = rec.dir(&paths.models_dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in rec.files.values() {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        assert_eq!(missing(&paths), ("silero-vad".into(), "koeinput model install silero-vad".into()));
+    }
 
     #[test]
     fn threads_below_one_become_one() {

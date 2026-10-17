@@ -19,7 +19,8 @@ scripts/dev cargo clippy --workspace --all-targets -- -D warnings
 - Unit tests run with the first command.
 - The daemon's D-Bus tests need a private session bus, so they run under `dbus-run-session`.
 - Model tests are opt-in: set `KOEINPUT_MODEL_TESTS=1` and `KOEINPUT_TEST_MODELS_DIR=<dir with installed models>`.
-- The microphone test is opt-in: set `KOEINPUT_AUDIO_TESTS=1`.
+- The microphone path cannot be tested through `scripts/dev`: the build container has no PulseAudio socket. Test it by hand with `koeinput listen` in the outer dev container (see below).
+- The capture test `records_from_default_source_when_enabled` (`KOEINPUT_AUDIO_TESTS=1`) is not runnable through `scripts/dev`: it needs a real sound server, and other tests set `PULSE_SERVER` for the whole process. Treat it as unsupported until a dedicated runner exists.
 
 ## Run the daemon in the dev container
 
