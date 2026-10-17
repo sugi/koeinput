@@ -78,7 +78,9 @@ KOEINPUT_DEV_IMAGE=bookworm scripts/addon test
 
 - The first image is Debian 13 (fcitx5 5.1). The `bookworm` image is Debian 12 (fcitx5 5.0). The addon must build and pass in both.
 - `scripts/addon test` builds the daemon with the `test-hooks` feature and runs the tests against it. Everything runs under `dbus-run-session` inside the container. Never run the tests on your own session bus.
-- The Debian 12 run skips the `daemonclient` test and the daemon scenarios of the addon test, because the daemon is built only in the Debian 13 image.
+- When the addon loads, it asks the bus to start the daemon (D-Bus activation), so the model is loaded by the first dictation. If the bus cannot start it, for example because no activation file is installed and you start the daemon by hand, the addon only logs a warning.
+- `daemonclient_activation` checks that start request. It runs on its own private bus, which finds an activation file for the test daemon in `target/addon/test-services/` (written by `scripts/addon test`, passed through `XDG_DATA_DIRS`). The other tests run on a bus without that file: on a bus that can start the daemon, every call to it starts one, so they could neither test "no daemon" nor start their own daemons.
+- The Debian 12 run skips `daemonclient`, `daemonclient_activation` and the daemon scenarios of the addon test, because the daemon is built only in the Debian 13 image.
 - The addon test uses its own `dbus.conf`. The system one depends on the `keyboard` addon, which is built into the fcitx5 binary and cannot load in a test instance.
 - `translation` checks that `addon/po/ja.po` compiles. To regenerate the catalog, run `scripts/dev sh -c 'xgettext --keyword=_ --language=C++ --from-code=UTF-8 --add-comments --package-name=fcitx5-koeinput -o addon/po/fcitx5-koeinput.pot addon/src/*.cpp addon/src/*.h'`.
 
