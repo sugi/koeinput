@@ -11,6 +11,7 @@
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
 #include <algorithm>
+#include <strings.h>
 
 namespace koeinput {
 
@@ -106,7 +107,15 @@ KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
 KoeInputAddon::~KoeInputAddon() = default;
 
 void KoeInputAddon::reloadConfig() {
-    fcitx::readAsIni(config_, kConfPath);
+    fcitx::RawConfig raw;
+    fcitx::readAsIni(raw, kConfPath);
+    // Configs written before the "Partial text" setting have the boolean ShowPartial.
+    if (!raw.get("PartialText")) {
+        if (auto old = raw.get("ShowPartial"); old && old->value() == "False") {
+            raw.setValueByPath("PartialText", PartialTextToString(PartialText::Off));
+        }
+    }
+    config_.load(raw);
     applyConfig();
 }
 
@@ -117,9 +126,27 @@ void KoeInputAddon::setConfig(const fcitx::RawConfig &config) {
 }
 
 void KoeInputAddon::applyConfig() {
+    // The controller only knows whether partial text can show at all; where it
+    // goes is decided per session by partialTarget().
+    const bool anyPartial = *config_.partialText != PartialText::Off || !config_.panelApps->empty();
     controller_.setSettings(Settings{*config_.tapToggle,
-                                     static_cast<uint64_t>(*config_.tapThreshold),
-                                     *config_.showPartial});
+                                     static_cast<uint64_t>(*config_.tapThreshold), anyPartial});
+}
+
+KoeInputAddon::PartialTarget KoeInputAddon::partialTarget(const fcitx::InputContext &ic) const {
+    const auto &apps = *config_.panelApps;
+    const bool listed = std::any_of(apps.begin(), apps.end(), [&](const std::string &app) {
+        return strcasecmp(app.c_str(), ic.program().c_str()) == 0;
+    });
+    if (listed) return PartialTarget::Panel;
+    switch (*config_.partialText) {
+    case PartialText::Off: return PartialTarget::None;
+    case PartialText::Panel: return PartialTarget::Panel;
+    case PartialText::InApp:
+        return ic.capabilityFlags().test(fcitx::CapabilityFlag::Preedit) ? PartialTarget::Client
+                                                                          : PartialTarget::Panel;
+    }
+    return PartialTarget::None;
 }
 
 bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
@@ -167,7 +194,10 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
         hotkeyPressMs_ = now;
         auto *ic = event.inputContext();
         // The controller shows the first status before it calls callStart().
-        if (controller_.idle()) sessionIc_ = ic->watch();
+        if (controller_.idle()) {
+            sessionIc_ = ic->watch();
+            partialTarget_ = partialTarget(*ic);
+        }
         swallow = controller_.hotkeyPress(now, eligible(ic), key.isModifier(), flagged);
     } else if (key.sym() == FcitxKey_Escape) {
         swallow = controller_.escape();
@@ -199,8 +229,8 @@ void KoeInputAddon::showStatus(Status status) {
 
 void KoeInputAddon::showPartial(const std::string &text) {
     auto *ic = sessionIc_.get();
-    if (!ic) return;
-    if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
+    if (!ic || partialTarget_ == PartialTarget::None) return;
+    if (partialTarget_ == PartialTarget::Client) {
         // DontCommit: fcitx5 would otherwise commit the client preedit on focus out.
         fcitx::Text preedit(text, fcitx::TextFormatFlags(
                                       {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::DontCommit}));

@@ -9,6 +9,8 @@
 #include <fcitx/inputpanel.h>
 #include <fcitx/instance.h>
 #include <fcitx/text.h>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,10 +32,12 @@ bool sendKey(Instance &instance, ICUUID uuid, const Key &key, bool isRelease) {
 } // namespace
 
 int main() {
-    // setConfig saves conf/koeinput.conf under the user config directory.
+    // The old-config scenarios write fcitx5/conf/koeinput.conf here. The testing
+    // environment skips the user config path, so the directory is also a system one.
     char configDir[] = "/tmp/koeinput-addon-test-XXXXXX";
     if (!mkdtemp(configDir)) return 1;
     setenv("XDG_CONFIG_HOME", configDir, 1);
+    setenv("XDG_CONFIG_DIRS", configDir, 1);
 
     setupTestingEnvironment(KOEINPUT_BINARY_DIR, {KOEINPUT_BINARY_DIR, FCITX5_SYSTEM_ADDONDIR},
                             {KOEINPUT_BINARY_DIR "/testdata", FCITX5_SYSTEM_PKGDATADIR "/testing",
@@ -67,10 +71,44 @@ int main() {
         KI_CHECK(commits.size() == n);
         for (auto &c : commits) KI_CHECK(c == "1");
     };
-    auto setHotkey = [&](const char *key) {
+    auto setOption = [&](const char *path, const char *value) {
         RawConfig raw;
-        raw.setValueByPath("Hotkey/0", key);
+        raw.setValueByPath(path, value);
         instance.addonManager().addon("koeinput")->setConfig(raw);
+    };
+    auto setHotkey = [&](const char *key) { setOption("Hotkey/0", key); };
+    auto configValue = [&](const char *path) {
+        RawConfig raw;
+        instance.addonManager().addon("koeinput")->getConfig()->save(raw);
+        return raw.valueByPath(path) ? *raw.valueByPath(path) : std::string("<unset>");
+    };
+    // Writes the config file as an older version would have, and reloads it.
+    auto reloadWithFile = [&](const char *body) {
+        const std::string dir = std::string(configDir) + "/fcitx5/conf";
+        std::filesystem::create_directories(dir);
+        std::ofstream out(dir + "/koeinput.conf");
+        out << body;
+        out.close();
+        instance.addonManager().addon("koeinput")->reloadConfig();
+    };
+    auto cancelSession = [&](ICUUID target) {
+        KI_CHECK(sendKey(instance, target, Key("Escape"), false));
+        KI_CHECK(sendKey(instance, target, Key("Escape"), true));
+        KI_CHECK(sendKey(instance, target, Key("Alt+Alt_R"), true));
+    };
+    auto onlyStatus = [&](InputContext *context) {
+        auto &panel = context->inputPanel();
+        KI_CHECK(!panel.auxUp().empty());
+        KI_CHECK(panel.preedit().empty());
+        KI_CHECK(panel.clientPreedit().empty());
+    };
+    auto inPanel = [&](InputContext *context) {
+        KI_CHECK(!context->inputPanel().preedit().empty());
+        KI_CHECK(context->inputPanel().clientPreedit().empty());
+    };
+    auto inClient = [&](InputContext *context) {
+        KI_CHECK(!context->inputPanel().clientPreedit().empty());
+        KI_CHECK(context->inputPanel().preedit().empty());
     };
     std::optional<koeinput::test::DaemonProcess> daemon;
 
@@ -105,11 +143,29 @@ int main() {
                   KI_CHECK(commits.empty());
                   KI_CHECK(ic()->inputPanel().auxUp().empty());
               })
-        .then(0, "composing passes through", [&] {
-            ic()->inputPanel().setClientPreedit(Text("a"));
-            KI_CHECK(!send("Alt_R", false));
-            KI_CHECK(!send("Alt+Alt_R", true));
-            ic()->inputPanel().setClientPreedit(Text());
+        .then(0, "composing passes through",
+              [&] {
+                  ic()->inputPanel().setClientPreedit(Text("a"));
+                  KI_CHECK(!send("Alt_R", false));
+                  KI_CHECK(!send("Alt+Alt_R", true));
+                  ic()->inputPanel().setClientPreedit(Text());
+              })
+        .then(0, "old config: ShowPartial=False reads as Off",
+              [&] {
+                  KI_CHECK(configValue("PartialText") == "InApp");
+                  reloadWithFile("ShowPartial=False\n");
+                  KI_CHECK(configValue("PartialText") == "Off");
+              })
+        .then(0, "old config: ShowPartial=True reads as InApp",
+              [&] {
+                  reloadWithFile("ShowPartial=True\n");
+                  KI_CHECK(configValue("PartialText") == "InApp");
+              })
+        .then(0, "old config: PartialText wins over ShowPartial", [&] {
+            reloadWithFile("ShowPartial=False\nPartialText=Panel\n");
+            KI_CHECK(configValue("PartialText") == "Panel");
+            setOption("PartialText", "InApp");
+            KI_CHECK(configValue("PartialText") == "InApp");
         });
 
     if (koeinput::test::DaemonProcess::binary()) {
@@ -228,7 +284,92 @@ int main() {
                   [&] {
                       committed(5);
                       displayClear(ic());
+                  })
+            // The context keeps the Preedit capability for the display-mode scenarios.
+            .then(0, "panel mode: press",
+                  [&] {
+                      setOption("PartialText", "Panel");
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(1300, "panel mode: in the panel preedit despite the Preedit capability",
+                  [&] {
+                      inPanel(ic());
+                      cancelSession(uuid);
+                  })
+            .then(1000, "panel mode: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic());
+                  })
+            .then(0, "off: press",
+                  [&] {
+                      setOption("PartialText", "Off");
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(1300, "off: status only",
+                  [&] {
+                      onlyStatus(ic());
+                      cancelSession(uuid);
+                  })
+            .then(1000, "off: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic());
+                  })
+            .then(0, "app list with Off: press",
+                  [&] {
+                      setOption("PanelApps/0", "TESTAPP");
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(1300, "app list with Off: in the panel preedit",
+                  [&] {
+                      inPanel(ic());
+                      cancelSession(uuid);
+                  })
+            .then(1000, "app list with Off: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic());
+                  })
+            .then(0, "app list with InApp: press",
+                  [&] {
+                      setOption("PartialText", "InApp");
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(1300, "app list with InApp: in the panel preedit",
+                  [&] {
+                      inPanel(ic());
+                      cancelSession(uuid);
+                  })
+            .then(1000, "app list with InApp: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic());
+                  })
+            .then(0, "app not on the list: press in the second context",
+                  [&] {
+                      ic()->focusOut();
+                      ic2()->setCapabilityFlags(CapabilityFlag::Preedit);
+                      ic2()->focusIn();
+                      KI_CHECK(sendKey(instance, uuid2, Key("Alt_R"), false));
+                  })
+            .then(1300, "app not on the list: in the client preedit",
+                  [&] {
+                      inClient(ic2());
+                      displayClear(ic());
+                      cancelSession(uuid2);
+                  })
+            .then(1000, "app not on the list: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic2());
+                      ic2()->setCapabilityFlags(CapabilityFlags());
+                      ic2()->focusOut();
                       ic()->setCapabilityFlags(CapabilityFlags());
+                      ic()->focusIn();
+                      // A key without children loads as an empty list.
+                      setOption("PanelApps", "");
+                      KI_CHECK(configValue("PanelApps/0") == "<unset>");
                   })
             .then(0, "plain hotkey: press Control+space",
                   [&] {
@@ -349,6 +490,7 @@ int main() {
     steps.start();
     instance.exec();
     daemon.reset();
+    std::filesystem::remove_all(configDir);
     std::fprintf(stderr, "%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

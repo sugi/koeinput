@@ -29,8 +29,11 @@ public:
     FCITX_ADDON_DEPENDENCY_LOADER(notifications, instance_->addonManager());
 
 private:
+    enum class PartialTarget { Client, Panel, None };
+
     void handleKey(fcitx::KeyEvent &event);
     bool eligible(fcitx::InputContext *ic) const;
+    PartialTarget partialTarget(const fcitx::InputContext &ic) const;
     void applyConfig();
 
     void callStart() override;
@@ -49,6 +52,8 @@ private:
     Controller controller_;
     std::unique_ptr<DaemonClient> client_;
     fcitx::TrackableObjectReference<fcitx::InputContext> sessionIc_;
+    // Chosen when the session starts, from the context's program and the settings.
+    PartialTarget partialTarget_ = PartialTarget::None;
     // Keycode and sym of the last hotkey press, so its release pairs even when
     // the modifiers changed in between (Control+space released as space,
     // Alt_R released as Alt+Shift+Meta_R).
