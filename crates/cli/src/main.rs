@@ -2,7 +2,7 @@ mod listen;
 mod model_cmd;
 mod transcribe;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -20,8 +20,10 @@ enum Cmd {
     Status,
     /// Transcribe WAV files in-process, without the daemon.
     Transcribe {
+        /// Also print partial results while transcribing.
         #[arg(long)]
         partials: bool,
+        /// WAV files to transcribe.
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
@@ -30,20 +32,31 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ModelCmd,
     },
+    /// Print the man page in roff format.
+    #[command(hide = true)]
+    Manpage,
 }
 
 #[derive(Subcommand)]
 enum ModelCmd {
+    /// List the catalog and which models are installed.
     List,
+    /// Download and install a model.
     Install {
+        /// Model id from the catalog.
         id: String,
+        /// Install from a local archive instead of downloading.
         #[arg(long)]
         from_file: Option<PathBuf>,
     },
+    /// Remove an installed model.
     Remove {
+        /// Model id.
         id: String,
     },
+    /// Make an installed model the default.
     Use {
+        /// Model id.
         id: String,
     },
 }
@@ -61,6 +74,7 @@ fn main() -> std::process::ExitCode {
         Cmd::Listen => listen::run(),
         Cmd::Status => listen::status(),
         Cmd::Transcribe { partials, files } => transcribe::run(&paths, partials, &files),
+        Cmd::Manpage => manpage().map_err(Into::into),
         Cmd::Model { cmd } => match cmd {
             ModelCmd::List => model_cmd::list(&paths),
             ModelCmd::Install { id, from_file } => {
@@ -77,4 +91,59 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+const COMMANDS_ROFF: &str = r#".SH COMMANDS
+.TP
+\fBlisten\fR
+Dictate through the daemon: Enter starts, Enter stops, Ctrl\-C cancels.
+.TP
+\fBstatus\fR
+Show the daemon's status.
+.TP
+\fBtranscribe\fR [\fB\-\-partials\fR] \fIFILE\fR...
+Transcribe WAV files in\-process, without the daemon. \fB\-\-partials\fR also prints partial results.
+.TP
+\fBmodel list\fR
+List the catalog and which models are installed.
+.TP
+\fBmodel install\fR \fIID\fR [\fB\-\-from\-file\fR \fIPATH\fR]
+Download and install a model. With \fB\-\-from\-file\fR, install from a local archive instead.
+.TP
+\fBmodel remove\fR \fIID\fR
+Remove an installed model.
+.TP
+\fBmodel use\fR \fIID\fR
+Make an installed model the default.
+.SH NOTES
+Recognition runs locally; no audio leaves the machine. The daemon is started on demand through D\-Bus.
+.SH FILES
+.TP
+\fI~/.config/koeinput/config.toml\fR
+Settings, including the selected model.
+.TP
+\fI~/.config/koeinput/dictionary.tsv\fR
+User dictionary.
+.TP
+\fI~/.local/share/koeinput/models/\fR
+Installed models.
+.TP
+\fI/usr/share/koeinput/models.toml\fR
+Model catalog.
+"#;
+
+/// The package ships this one page only, so it describes every subcommand itself.
+fn manpage() -> std::io::Result<()> {
+    use std::io::Write;
+    let cmd = Cli::command().disable_help_subcommand(true);
+    let man = clap_mangen::Man::new(cmd).date("2026-10");
+    let mut out = std::io::stdout().lock();
+    man.render_title(&mut out)?;
+    man.render_name_section(&mut out)?;
+    man.render_synopsis_section(&mut out)?;
+    man.render_description_section(&mut out)?;
+    man.render_options_section(&mut out)?;
+    out.write_all(COMMANDS_ROFF.as_bytes())?;
+    man.render_version_section(&mut out)?;
+    Ok(())
 }

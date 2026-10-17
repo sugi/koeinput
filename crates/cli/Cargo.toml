@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "koeinput"
@@ -12,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+clap_mangen = "0.3.3"
 futures-util = "0.3.34"
 koeinput-core = { path = "../core" }
 koeinput-dbus-api = { version = "0.1.0", path = "../dbus-api" }
