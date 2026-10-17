@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds, tests or packages the fcitx5 addon in the build container.
-# Usage: scripts/addon build|test|deb   (KOEINPUT_DEV_IMAGE=bookworm for the Debian 12 check)
+# Builds or tests the fcitx5 addon in the build container.
+# Usage: scripts/addon build|test   (KOEINPUT_DEV_IMAGE=bookworm for the Debian 12 check)
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 name=${KOEINPUT_DEV_IMAGE:-trixie}
@@ -8,19 +8,35 @@ build=target/addon
 [ "$name" = trixie ] || build="target/addon-$name"
 configure="cmake -S addon -B $build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr"
 compile="cmake --build $build -j8"
+ctest="ctest --test-dir $build --output-on-failure"
 case "${1:-}" in
   build)
     "$root/scripts/dev" sh -c "$configure && $compile" ;;
   test)
-    daemon=
-    if [ "$name" = trixie ]; then
-      "$root/scripts/dev" cargo build -p koeinput-daemon --features test-hooks
-      daemon=/src/target/debug/koeinput-daemon
+    if [ "$name" != trixie ]; then
+      "$root/scripts/dev" sh -c "$configure && $compile && KOEINPUT_TEST_DAEMON= dbus-run-session -- $ctest"
+      exit
     fi
-    "$root/scripts/dev" sh -c "$configure && $compile && KOEINPUT_TEST_DAEMON=$daemon dbus-run-session -- ctest --test-dir $build --output-on-failure" ;;
-  deb)
-    "$root/scripts/dev" sh -c "$configure && $compile && cd $build && cpack -G DEB" ;;
+    "$root/scripts/dev" cargo build -p koeinput-daemon --features test-hooks
+    daemon=/src/target/debug/koeinput-daemon
+    # The activation file runs inside the build container, so it uses container paths.
+    services="$root/$build/test-services/dbus-1/services"
+    mkdir -p "$services"
+    cat > "$services/org.nemui.KoeInput.service" <<EOF
+[D-BUS Service]
+Name=org.nemui.KoeInput
+Exec=/usr/bin/env KOEINPUT_TEST_FAKE=1 HOME=/tmp/koeinput-activated XDG_CONFIG_HOME=/tmp/koeinput-activated/config XDG_DATA_HOME=/tmp/koeinput-activated/data $daemon
+EOF
+    # Only the activation test gets a bus that can start the daemon: on that bus
+    # every call to the daemon's name would start one, so the other tests could
+    # neither see "no daemon" nor start their own daemons.
+    "$root/scripts/dev" sh -c "$configure && $compile || exit 1
+      status=0
+      XDG_DATA_DIRS=/src/$build/test-services:/usr/local/share:/usr/share KOEINPUT_TEST_DAEMON=$daemon \
+        dbus-run-session -- $ctest -R '^daemonclient_activation\$' || status=1
+      KOEINPUT_TEST_DAEMON=$daemon dbus-run-session -- $ctest -E '^daemonclient_activation\$' || status=1
+      exit \$status" ;;
   *)
-    echo "usage: scripts/addon build|test|deb" >&2
+    echo "usage: scripts/addon build|test" >&2
     exit 2 ;;
 esac

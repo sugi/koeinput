@@ -23,11 +23,12 @@ CallError callErrorFromName(const std::string &name) {
 Controller::Controller(Actions &actions, Settings settings)
     : actions_(actions), settings_(settings) {}
 
-bool Controller::hotkeyPress(uint64_t nowMs, bool eligible, bool modifier) {
-    // Modifier keys never auto-repeat, so a press while one is down means the
-    // release was lost. A plain key first repeats after the desktop's initial
-    // delay of 500 to 660 ms, so the gap must be longer than that.
-    const bool repeat = !modifier && keyDown_ && nowMs - lastPressMs_ <= kRepeatGapMs;
+bool Controller::hotkeyPress(uint64_t nowMs, bool eligible, bool modifier, bool repeat) {
+    // Without the frontend's repeat flag: modifier keys never auto-repeat, so a
+    // press while one is down means the release was lost. A plain key first
+    // repeats after the desktop's initial delay of 500 to 660 ms, so the gap
+    // must be longer than that.
+    repeat = repeat || (!modifier && keyDown_ && nowMs - lastPressMs_ <= kRepeatGapMs);
     lastPressMs_ = nowMs;
     if (repeat) return ownsPress_;
     keyDown_ = true;
@@ -125,6 +126,7 @@ void Controller::startReply(uint32_t id) {
 void Controller::startFailed(CallError kind, const std::string &message) {
     if (phase_ != Phase::Starting) return;
     const bool quiet = pendingCancel_;
+    cancelBuffered();
     finish();
     if (!quiet) notifyCallError(kind, message);
 }
@@ -199,6 +201,7 @@ void Controller::daemonLeft() {
     lastCancelledId_.reset();
     if (phase_ == Phase::Idle) return;
     const bool quiet = pendingCancel_;
+    // Buffered sessions died with the daemon; a Cancel to its name could start a new one.
     finish();
     if (!quiet) actions_.notify(Notice::DaemonLeft, "");
 }
@@ -207,6 +210,7 @@ void Controller::timerFired() {
     timerRunning_ = false;
     if (phase_ == Phase::Starting) {
         const bool quiet = pendingCancel_;
+        cancelBuffered();
         finish();
         if (!quiet) actions_.notify(Notice::NoResponse, "");
         return;
@@ -297,6 +301,22 @@ void Controller::cancelSession(uint32_t id) {
 void Controller::cancelStray(uint32_t id) {
     if (lastCancelledId_ == id) return;
     cancelSession(id);
+}
+
+// Starting ended without a reply: the sessions the buffered signals belong
+// to are live in the daemon and nobody else will stop them.
+void Controller::cancelBuffered() {
+    auto pending = std::move(buffered_);
+    buffered_.clear();
+    std::vector<uint32_t> done;
+    for (const auto &b : pending) {
+        const bool live = b.kind == SignalKind::Partial ||
+                          (b.kind == SignalKind::State &&
+                           (b.value == "starting" || b.value == "recording"));
+        if (!live || std::find(done.begin(), done.end(), b.id) != done.end()) continue;
+        done.push_back(b.id);
+        cancelStray(b.id);
+    }
 }
 
 void Controller::showRecording() {

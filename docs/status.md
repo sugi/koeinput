@@ -24,7 +24,7 @@ Decisions themselves live in [decisions.md](decisions.md).
 |---|---|
 | M0. Model spike | Done. Default model: parakeet-ja (int8, sherpa-onnx). |
 | M1. Daemon and CLI | Implemented and merged into `main` (merge commit `dc1a3bf`). One check left, see below. |
-| M2. Minimal fcitx5 addon | In progress on branch `m2-addon`. |
+| M2. Minimal fcitx5 addon | Implemented on branch `m2-addon` (merge pending). Tests pass in the Debian 13 and Debian 12 images. The host check is pending and is done together with the M3 packages. |
 | M3. Debian packaging | Not started. |
 | M4. Quality | Not started. |
 | M5. RPM, PKGBUILD, CI, release | Not started. |

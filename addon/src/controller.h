@@ -63,7 +63,8 @@ public:
     void setSettings(const Settings &settings) { settings_ = settings; }
 
     // Key inputs return true when the key must be swallowed.
-    bool hotkeyPress(uint64_t nowMs, bool eligible, bool modifier);
+    // repeat: the frontend flagged the press as an auto-repeat (KeyState::Repeat).
+    bool hotkeyPress(uint64_t nowMs, bool eligible, bool modifier, bool repeat = false);
     bool hotkeyRelease(uint64_t nowMs);
     bool escape();
     bool otherKeyPress();
@@ -99,6 +100,7 @@ private:
     void stopWatchdog();
     void cancelSession(uint32_t id);
     void cancelStray(uint32_t id);
+    void cancelBuffered();
     void showRecording();
     void releaseDisplay();
     bool current(uint32_t id) const { return id_ && *id_ == id; }

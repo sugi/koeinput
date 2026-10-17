@@ -24,6 +24,7 @@ struct DaemonCallbacks {
     std::function<void(uint32_t id, const std::string &text)> finalText;
     std::function<void(uint32_t id, const std::string &code, const std::string &message)> error;
     std::function<void()> daemonLeft;
+    std::function<void(const std::string &message)> activateFailed;
 };
 
 // Asynchronous client of the KoeInput daemon on an fcitx5 D-Bus connection.
@@ -38,6 +39,9 @@ public:
     DaemonClient(fcitx::dbus::Bus &bus, DaemonCallbacks callbacks);
     ~DaemonClient();
 
+    // Asks the bus to start the daemon if it can (D-Bus activation), without
+    // waiting for it. A failure only reaches activateFailed.
+    void activate();
     void start();
     void stop(uint32_t id);
     void cancel(uint32_t id);
@@ -53,6 +57,7 @@ private:
     fcitx::dbus::ServiceWatcher watcher_;
     std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> watch_;
     std::unique_ptr<fcitx::dbus::Slot> match_;
+    std::unique_ptr<fcitx::dbus::Slot> activateCall_;
     std::unique_ptr<fcitx::dbus::Slot> startCall_;
     std::unique_ptr<fcitx::dbus::Slot> stopCall_;
     std::unique_ptr<fcitx::dbus::Slot> cancelCall_;
