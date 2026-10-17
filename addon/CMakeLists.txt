@@ -13,7 +13,7 @@ find_package(Fcitx5Module REQUIRED COMPONENTS DBus Notifications TestFrontend)
 
 set(KOEINPUT_GETTEXT_DOMAIN "fcitx5-koeinput")
 
-add_library(koeinput MODULE src/koeinput.cpp)
+add_library(koeinput MODULE src/koeinput.cpp src/controller.cpp src/daemonclient.cpp)
 target_link_libraries(koeinput PRIVATE Fcitx5::Core Fcitx5::Config Fcitx5::Utils
   Fcitx5::Module::DBus Fcitx5::Module::Notifications)
 target_compile_definitions(koeinput PRIVATE
@@ -41,3 +41,11 @@ target_compile_definitions(addon_test PRIVATE
 add_dependencies(addon_test koeinput)
 add_test(NAME addon COMMAND addon_test)
 set_tests_properties(addon PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+add_executable(controller_test test/controller_test.cpp src/controller.cpp)
+add_test(NAME controller COMMAND controller_test)
+
+add_executable(daemonclient_test test/daemonclient_test.cpp src/daemonclient.cpp src/controller.cpp)
+target_link_libraries(daemonclient_test PRIVATE Fcitx5::Utils)
+add_test(NAME daemonclient COMMAND daemonclient_test)
+set_tests_properties(daemonclient PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
