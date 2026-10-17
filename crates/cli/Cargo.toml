@@ -1,0 +1,24 @@
+[package]
+name = "koeinput-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "koeinput"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+futures-util = "0.3.34"
+koeinput-core = { path = "../core" }
+koeinput-dbus-api = { version = "0.1.0", path = "../dbus-api" }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

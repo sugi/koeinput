@@ -1,0 +1,153 @@
+mod service;
+
+use futures_util::StreamExt;
+use koeinput_core::build::{BuildError, load_engine};
+use koeinput_core::config::{Config, Paths, load};
+use koeinput_core::engine::Engine;
+use koeinput_core::models::DEFAULT_MODEL_ID;
+use koeinput_dbus_api::{BUS_NAME, OBJECT_PATH};
+use service::{Readiness, Recognizer1, Shared};
+use std::sync::{Arc, Mutex};
+use zbus::object_server::InterfaceRef;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+    let paths = Paths::from_env();
+    let cfg = load(&paths.config_file)?;
+    let test_fake =
+        cfg!(feature = "test-hooks") && std::env::var("KOEINPUT_TEST_FAKE").as_deref() == Ok("1");
+    let shared = Arc::new(Mutex::new(Shared {
+        readiness: Readiness::Loading,
+        current: None,
+        next_id: 0,
+        model: cfg
+            .model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string()),
+        source: cfg.source.clone(),
+        test_source: test_fake,
+    }));
+    // zbus would otherwise let a second daemon take the name from a running one.
+    let conn = zbus::connection::Builder::session()
+        .allow_name_replacements(false)
+        .replace_existing_names(false)
+        .name(BUS_NAME)
+        .serve_at(
+            OBJECT_PATH,
+            Recognizer1 {
+                shared: shared.clone(),
+            },
+        )
+        .build()
+        .await?;
+    tracing::info!("serving {BUS_NAME}");
+
+    // Subscribed before the model can load, so no session can start before the watch is in place.
+    let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
+    let mut changes = dbus.receive_name_owner_changed().await?;
+    let iface = conn
+        .object_server()
+        .interface::<_, Recognizer1>(OBJECT_PATH)
+        .await?;
+    tokio::spawn(load_model(paths, cfg, test_fake, shared.clone(), iface));
+
+    while let Some(sig) = changes.next().await {
+        let Ok(args) = sig.args() else { continue };
+        if args.new_owner().is_some() {
+            continue;
+        }
+        let s = shared.lock().unwrap();
+        if let Some(c) = &s.current
+            && args.name().as_str() == c.owner.as_str()
+        {
+            tracing::info!(session = c.id, "client left; cancelling");
+            c.handle.cancel();
+        }
+    }
+    Ok(())
+}
+
+async fn load_model(
+    paths: Paths,
+    cfg: Config,
+    test_fake: bool,
+    shared: Arc<Mutex<Shared>>,
+    iface: InterfaceRef<Recognizer1>,
+) {
+    let r = tokio::task::spawn_blocking(move || load_for(&paths, &cfg, test_fake)).await;
+    {
+        let mut s = shared.lock().unwrap();
+        match r {
+            Ok(Ok((engine, id))) => {
+                s.model = id;
+                s.readiness = Readiness::Ready(Arc::new(engine));
+                tracing::info!(model = %s.model, "model loaded");
+            }
+            Ok(Err(BuildError::NoModel { hint, .. })) => {
+                tracing::warn!("no model installed; run `{hint}`");
+                s.readiness = Readiness::Missing(format!("no model installed; run `{hint}`"));
+            }
+            Ok(Err(e)) => {
+                tracing::error!("{e}");
+                s.readiness = Readiness::Missing(e.to_string());
+            }
+            Err(e) => {
+                tracing::error!("model loading failed: {e}");
+                s.readiness = Readiness::Missing(format!("model loading failed: {e}"));
+            }
+        }
+    }
+    // Proxies cache properties, so clients only see the new values through PropertiesChanged.
+    // Model goes first so that a client reacting to Ready already has the right Model.
+    let i = iface.get().await;
+    let emitter = iface.signal_emitter();
+    for r in [
+        i.model_changed(emitter).await,
+        i.ready_changed(emitter).await,
+    ] {
+        if let Err(e) = r {
+            tracing::warn!("announcing property change: {e}");
+        }
+    }
+}
+
+fn load_for(paths: &Paths, cfg: &Config, test_fake: bool) -> Result<(Engine, String), BuildError> {
+    #[cfg(feature = "test-hooks")]
+    if test_fake {
+        if std::env::var("KOEINPUT_TEST_NO_MODEL").as_deref() == Ok("1") {
+            return Err(BuildError::NoModel {
+                id: "parakeet-ja".into(),
+                hint: "koeinput model install parakeet-ja".into(),
+            });
+        }
+        if std::env::var("KOEINPUT_TEST_LOAD_PANIC").as_deref() == Ok("1") {
+            panic!("test loader panic");
+        }
+        if let Some(d) = service::test_delay("KOEINPUT_TEST_LOAD_DELAY_MS") {
+            std::thread::sleep(d);
+        }
+        use koeinput_core::testing::{FakeRecognizer, FakeVad};
+        let rec = if std::env::var("KOEINPUT_TEST_PANIC").as_deref() == Ok("1") {
+            FakeRecognizer::new(|_| panic!("test recognizer panic"))
+        } else {
+            FakeRecognizer::new(|s| Ok(format!("{}", s.len() / 16000)))
+        };
+        let engine = Engine {
+            cfg: koeinput_core::session::SessionConfig::from_config(cfg),
+            rec: Arc::new(rec),
+            vad: Arc::new(|| {
+                Ok(Box::new(FakeVad::always_speech()) as Box<dyn koeinput_core::vad::Vad>)
+            }),
+            post: Arc::new(koeinput_core::postprocess::PostProcessor::empty()),
+        };
+        return Ok((engine, "fake".into()));
+    }
+    let _ = test_fake;
+    load_engine(paths, cfg)
+}
