@@ -104,7 +104,7 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput. 
 
 ### Host check
 
-The packages come from the packaging milestone. Until they exist, build them as described in the install section below.
+The host check uses the Debian packages, so do it after they are built. The packaging milestone (M3) adds the steps to build and install them to this file.
 
 Install and start:
 
@@ -113,7 +113,7 @@ sudo apt install ./koeinput_0.1.0-1_amd64.deb ./fcitx5-koeinput_0.1.0-1_amd64.de
 koeinput model install parakeet-ja
 ```
 
-Restart fcitx5 so it loads the addon: System Settings, Keyboard, Virtual Keyboard, choose None, apply, then choose Fcitx 5 and apply again. The keyboard keeps typing while fcitx5 is down, so a broken addon never locks you out of a terminal.
+Restart fcitx5 so it loads the addon: open System Settings, then Keyboard, then Virtual Keyboard (Plasma 6; on Plasma 5 it is Input Devices, then Virtual Keyboard). Choose None, apply, then choose Fcitx 5 and apply again. The keyboard keeps typing while fcitx5 is down, so a broken addon never locks you out of a terminal.
 
 Rollback:
 

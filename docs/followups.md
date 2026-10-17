@@ -29,6 +29,8 @@ Each item names the milestone it belongs to.
 - Clients using text-input-v3 (Chrome, Discord) may commit their own composition on blur even though the client preedit is marked `DontCommit`. Input for the per-app display choice in M4.
 - An input method switch key during a session is handled by fcitx5 before the addon: the session keeps running while the engine change may wipe the status.
 - The `DaemonProcess` test helper: a ready-timeout abort leaves the daemon child running; the child uses stdio between fork and exec; the temporary directories are not removed.
+- After a lost release of a modifier hotkey, the stored keycode is not cleared by a later press of another key on the same physical key (for example Shift+Meta_R), so that key's release is swallowed.
+- Frontends that send keycode 0 cannot pair a release such as Alt+Shift+Meta_R with a stateless Alt_R press.
 
 ## Done
 
