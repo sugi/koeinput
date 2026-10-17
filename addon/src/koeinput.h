@@ -11,6 +11,7 @@
 #include <fcitx/event.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/instance.h>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -32,6 +33,9 @@ private:
     enum class PartialTarget { Client, Panel, None };
 
     void handleKey(fcitx::KeyEvent &event);
+    void handleKeyByCode(fcitx::KeyEvent &event, int code);
+    void handleKeyBySym(fcitx::KeyEvent &event);
+    bool hotkeyPress(fcitx::KeyEvent &event, uint64_t nowMs, bool flagged);
     bool eligible(fcitx::InputContext *ic) const;
     PartialTarget partialTarget(const fcitx::InputContext &ic) const;
     void applyConfig();
@@ -54,25 +58,34 @@ private:
     fcitx::TrackableObjectReference<fcitx::InputContext> sessionIc_;
     // Chosen when the session starts, from the context's program and the settings.
     PartialTarget partialTarget_ = PartialTarget::None;
-    // A pressed key, remembered by keycode and sym so its release pairs even
-    // when the modifiers changed in between (Control+space released as space,
-    // Alt_R released as Alt+Shift+Meta_R).
+    // A key press whose release has not come yet.
     struct PressedKey {
-        int code = 0;
         fcitx::KeySym sym = FcitxKey_None;
         uint64_t pressMs = 0;
         // False once a later press lacked the key's modifier state: the key
         // is still remembered for its release, but it cannot start a chord.
         bool held = true;
 
-        bool empty() const { return code == 0 && sym == FcitxKey_None; }
-        bool matches(const fcitx::Key &key) const {
-            return (code != 0 && key.code() == code) || (sym != FcitxKey_None && key.sym() == sym);
-        }
+        bool empty() const { return sym == FcitxKey_None; }
+        bool matches(const fcitx::Key &key) const { return sym != FcitxKey_None && key.sym() == sym; }
+    };
+    // What a press became, so that its release goes the same way.
+    enum class Role { Hotkey, Chord, Escape, Other };
+    struct KeyRecord : PressedKey {
+        Role role = Role::Other;
+        bool swallowed = false;
     };
 
-    bool hotkeyHeld(const fcitx::Key &rawKey, uint64_t nowMs) const;
+    static bool hotkeyHeld(const PressedKey &hotkey, const fcitx::Key &rawKey, uint64_t nowMs);
+    static void dropHeldEvidence(PressedKey &hotkey, const fcitx::Key &rawKey);
 
+    // Frontends with keycodes: every press is owned by its keycode and the
+    // release of that keycode follows it. The record with role Hotkey, if
+    // any, is the one at hotkeyCode_.
+    std::map<int, KeyRecord> pressed_;
+    int hotkeyCode_ = 0;
+
+    // Frontends without keycodes pair by sym instead.
     PressedKey hotkey_;
     // Other configured hotkeys pressed while hotkey_ is down; they do nothing.
     std::vector<PressedKey> chord_;

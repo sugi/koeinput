@@ -174,18 +174,128 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
     return !list || list->size() == 0;
 }
 
-// The stored hotkey's release may have been lost (some X11 paths drop
-// releases), so a chord needs evidence that the key is still down: a held
-// modifier shows in the states of later keys; a plain key auto-repeats.
-// The raw key keeps every state bit; the normalized one may not.
-bool KoeInputAddon::hotkeyHeld(const fcitx::Key &rawKey, uint64_t nowMs) const {
-    if (hotkey_.empty() || !hotkey_.held) return false;
-    const fcitx::KeyStates modifier = modifierStates(hotkey_.sym);
+// The hotkey's release may have been lost (some X11 paths drop releases), so
+// a chord needs evidence that the key is still down: a held modifier shows in
+// the states of later keys; a plain key auto-repeats. The raw key keeps every
+// state bit; the normalized one may not.
+bool KoeInputAddon::hotkeyHeld(const PressedKey &hotkey, const fcitx::Key &rawKey, uint64_t nowMs) {
+    if (hotkey.empty() || !hotkey.held) return false;
+    const fcitx::KeyStates modifier = modifierStates(hotkey.sym);
     if (modifier) return (rawKey.states() & modifier) == modifier;
-    return nowMs - hotkey_.pressMs <= Controller::kRepeatGapMs;
+    return nowMs - hotkey.pressMs <= Controller::kRepeatGapMs;
+}
+
+// Frontends report the state before the press, so a held modifier hotkey
+// shows in every later press. A press without it means the release was
+// lost; the key stays stored so its release still pairs, but cannot start
+// a chord.
+void KoeInputAddon::dropHeldEvidence(PressedKey &hotkey, const fcitx::Key &rawKey) {
+    if (!hotkey.held) return;
+    const fcitx::KeyStates modifier = modifierStates(hotkey.sym);
+    if (modifier && (rawKey.states() & modifier) != modifier) hotkey.held = false;
+}
+
+bool KoeInputAddon::hotkeyPress(fcitx::KeyEvent &event, uint64_t nowMs, bool flagged) {
+    auto *ic = event.inputContext();
+    // The controller shows the first status before it calls callStart().
+    if (controller_.idle()) {
+        sessionIc_ = ic->watch();
+        partialTarget_ = partialTarget(*ic);
+    }
+    return controller_.hotkeyPress(nowMs, eligible(ic), isModifierKey(event.key()), flagged);
 }
 
 void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
+    // key() is normalized: it has lost the Repeat state and may have lost
+    // Mod5; rawKey() keeps them and the keycode.
+    if (const int code = event.rawKey().code(); code != 0) {
+        handleKeyByCode(event, code);
+    } else {
+        handleKeyBySym(event);
+    }
+}
+
+// Every press is recorded under its keycode and its release goes the same
+// way: swallowed if the press was, passed if the press passed. The sym and
+// the states of the release do not matter (Control+space is released as
+// space, Alt_R as Alt+Shift+Meta_R), and a release without a press is not
+// ours. A new press of a recorded keycode is its auto-repeat, or its release
+// was lost: the record is replaced.
+void KoeInputAddon::handleKeyByCode(fcitx::KeyEvent &event, int code) {
+    const auto &key = event.key();
+    const uint64_t now = nowMs();
+    if (event.isRelease()) {
+        const auto it = pressed_.find(code);
+        if (it == pressed_.end()) return;
+        const KeyRecord record = it->second;
+        pressed_.erase(it);
+        if (record.role == Role::Hotkey) {
+            hotkeyCode_ = 0;
+            controller_.hotkeyRelease(now);
+        }
+        if (record.swallowed) event.filterAndAccept();
+        return;
+    }
+    const bool flagged = event.rawKey().states().test(fcitx::KeyState::Repeat);
+    const auto hotkeyIt = pressed_.find(hotkeyCode_);
+    KeyRecord *hotkey = hotkeyIt == pressed_.end() ? nullptr : &hotkeyIt->second;
+    if (hotkey && code != hotkeyCode_) dropHeldEvidence(*hotkey, event.rawKey());
+    if (const auto it = pressed_.find(code); it != pressed_.end()) {
+        KeyRecord &record = it->second;
+        // The auto-repeat of a held key can arrive under another sym once its
+        // modifiers went up (Control+space repeating as space). Modifier keys
+        // never auto-repeat, and after a longer gap the release was lost: then
+        // the press is a new key.
+        const bool repeat = flagged || (!isModifierKey(fcitx::Key(record.sym)) &&
+                                        now - record.pressMs <= Controller::kRepeatGapMs);
+        if (repeat && record.role == Role::Hotkey) {
+            record.pressMs = now;
+            if (controller_.hotkeyPress(now, eligible(event.inputContext()), isModifierKey(key), true)) {
+                event.filterAndAccept();
+            }
+            return;
+        }
+        if (repeat && record.role == Role::Chord) {
+            record.pressMs = now;
+            event.filterAndAccept();
+            return;
+        }
+    }
+    KeyRecord record{{key.sym(), now}};
+    if (key.checkKeyList(*config_.hotkey)) {
+        if (hotkey && code != hotkeyCode_ && hotkeyHeld(*hotkey, event.rawKey(), now)) {
+            // Another configured hotkey while the first is still down is a chord.
+            record.role = Role::Chord;
+            record.swallowed = true;
+        } else {
+            // The controller follows one press at a time. A hotkey press whose
+            // release never came keeps its record, so the release is still
+            // swallowed when it arrives, but it no longer reaches the controller.
+            if (hotkey && code != hotkeyCode_) hotkey->role = Role::Other;
+            record.role = Role::Hotkey;
+            record.swallowed = hotkeyPress(event, now, flagged);
+            hotkeyCode_ = code;
+        }
+    } else if (key.sym() == FcitxKey_Escape) {
+        record.role = Role::Escape;
+        record.swallowed = controller_.escape();
+    } else if (!isModifierKey(key)) {
+        // A modifier alone is not "another key": it may be the start of a
+        // combination hotkey that stops a tap-mode session.
+        controller_.otherKeyPress();
+    }
+    // Another sym on the hotkey's keycode (Shift+Meta_R on the Alt_R key)
+    // means the hotkey's release was lost.
+    if (code == hotkeyCode_ && record.role != Role::Hotkey) hotkeyCode_ = 0;
+    pressed_[code] = record;
+    if (record.swallowed) event.filterAndAccept();
+}
+
+// Without keycodes a release pairs by sym: the stored hotkey's sym, a
+// modifier release of a configured modifier hotkey, or the configured
+// hotkey itself. These rules cannot tell a key apart from the hotkey on
+// the same physical key once the modifiers changed.
+void KoeInputAddon::handleKeyBySym(fcitx::KeyEvent &event) {
     const auto &key = event.key();
     const uint64_t now = nowMs();
     const bool sameKey = hotkey_.matches(key);
@@ -213,20 +323,8 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
         if (swallow) event.filterAndAccept();
         return;
     }
-    // Once the modifiers of a combination hotkey are released, its auto-repeat
-    // arrives as the bare key. Frontends that flag repeats settle it; without
-    // the flag, a bare press after a longer gap means the key was released and
-    // the release lost, so the press is an ordinary key again.
-    // key() is normalized and has lost the Repeat state; rawKey() keeps it.
     const bool flagged = event.rawKey().states().test(fcitx::KeyState::Repeat);
-    // Frontends report the state before the press, so a held modifier hotkey
-    // shows in every later press. A press without it means the release was
-    // lost; the key stays stored so its release still pairs, but cannot
-    // start a chord.
-    if (!sameKey && hotkey_.held) {
-        const fcitx::KeyStates modifier = modifierStates(hotkey_.sym);
-        if (modifier && (event.rawKey().states() & modifier) != modifier) hotkey_.held = false;
-    }
+    if (!sameKey) dropHeldEvidence(hotkey_, event.rawKey());
     if (chordKey != chord_.end()) {
         // A chord key repeats like the hotkey below (Alt_R released first, the
         // chord's space still down); after a longer gap its release was lost.
@@ -237,25 +335,23 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
         }
         chord_.erase(chordKey);
     }
+    // Once the modifiers of a combination hotkey are released, its auto-repeat
+    // arrives as the bare key. Frontends that flag repeats settle it; without
+    // the flag, a bare press after a longer gap means the key was released and
+    // the release lost, so the press is an ordinary key again.
     const bool repeat = sameKey && (flagged || now - hotkey_.pressMs <= Controller::kRepeatGapMs);
     if (repeat || key.checkKeyList(*config_.hotkey)) {
         // Another configured hotkey while the first is still down is a chord.
-        if (!sameKey && hotkeyHeld(event.rawKey(), now)) {
-            chord_.push_back({key.code(), key.sym(), now});
+        if (!sameKey && hotkeyHeld(hotkey_, event.rawKey(), now)) {
+            chord_.push_back({key.sym(), now});
             event.filterAndAccept();
             return;
         }
-        hotkey_ = {key.code(), key.sym(), now};
-        auto *ic = event.inputContext();
-        // The controller shows the first status before it calls callStart().
-        if (controller_.idle()) {
-            sessionIc_ = ic->watch();
-            partialTarget_ = partialTarget(*ic);
-        }
-        swallow = controller_.hotkeyPress(now, eligible(ic), isModifierKey(key), flagged);
+        hotkey_ = {key.sym(), now};
+        swallow = hotkeyPress(event, now, flagged);
     } else {
-        // Another sym on the hotkey's keycode (Shift+Meta_R on the Alt_R key)
-        // means the hotkey's release was lost: let this key's release pass.
+        // The hotkey's sym again after the repeat gap means its release was
+        // lost: let this key's release pass.
         if (sameKey) hotkey_ = {};
         if (key.sym() == FcitxKey_Escape) {
             swallow = controller_.escape();

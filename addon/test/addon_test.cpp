@@ -58,6 +58,11 @@ int main() {
             commits.push_back(static_cast<CommitStringEvent &>(event).text());
         });
     auto send = [&](const char *key, bool release) { return sendKey(instance, uuid, Key(key), release); };
+    // The same key as a real frontend sends it: with the keycode of the physical key.
+    auto sendCode = [&](const char *key, int code, bool release) {
+        const Key k(key);
+        return sendKey(instance, uuid, Key(k.sym(), k.states(), code), release);
+    };
     auto ic = [&] { return instance.inputContextManager().findByUUID(uuid); };
     auto ic2 = [&] { return instance.inputContextManager().findByUUID(uuid2); };
     auto displayClear = [&](InputContext *context) {
@@ -760,6 +765,155 @@ int main() {
                       displayClear(ic());
                       setHotkey("Alt_R");
                   })
+            // With keycodes (keycode 108 is the Alt_R key, 65 space, 37 Control_L,
+            // 9 Escape), every release pairs with the press of its keycode.
+            .then(0, "keycodes, hold: press", [&] { KI_CHECK(sendCode("Alt_R", 108, false)); })
+            .then(1400, "keycodes, hold: a release without a press passes, the hotkey release stops",
+                  [&] {
+                      KI_CHECK(!sendCode("space", 65, true));
+                      KI_CHECK(ic()->inputPanel().auxUp().toString() == "Recording");
+                      KI_CHECK(sendCode("Alt+Alt_R", 108, true));
+                  })
+            .then(1500, "keycodes, hold: committed",
+                  [&] {
+                      committed(24);
+                      displayClear(ic());
+                  })
+            .then(0, "keycodes, tap: press and release",
+                  [&] {
+                      KI_CHECK(sendCode("Alt_R", 108, false));
+                      KI_CHECK(sendCode("Alt+Alt_R", 108, true));
+                  })
+            .then(1400, "keycodes, tap: still recording, press again",
+                  [&] {
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                      KI_CHECK(sendCode("Alt_R", 108, false));
+                      KI_CHECK(sendCode("Alt+Alt_R", 108, true));
+                  })
+            .then(1500, "keycodes, tap: committed",
+                  [&] {
+                      committed(25);
+                      displayClear(ic());
+                  })
+            .then(0, "keycodes, esc: press", [&] { KI_CHECK(sendCode("Alt_R", 108, false)); })
+            .then(300, "keycodes, esc: cancel, the release is lost",
+                  [&] {
+                      KI_CHECK(sendCode("Escape", 9, false));
+                      KI_CHECK(sendCode("Escape", 9, true));
+                      displayClear(ic());
+                  })
+            // A new press of the hotkey's keycode replaces the stored press.
+            .then(300, "keycodes, esc: a press within the repeat gap starts a new session",
+                  [&] {
+                      KI_CHECK(sendCode("Alt_R", 108, false));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(1400, "keycodes, esc: release", [&] { KI_CHECK(sendCode("Alt+Alt_R", 108, true)); })
+            .then(1500, "keycodes, esc: committed, a release without a press passes",
+                  [&] {
+                      committed(26);
+                      displayClear(ic());
+                      KI_CHECK(!sendCode("Alt+Alt_R", 108, true));
+                  })
+            // After a lost Alt_R release, Control+Alt_R on the same keycode is a
+            // new key: it passes with its release, whichever modifier goes up first.
+            .then(0, "keycodes, lost release: press Alt_R", [&] { KI_CHECK(sendCode("Alt_R", 108, false)); })
+            .then(300, "keycodes, lost release: esc cancels",
+                  [&] {
+                      KI_CHECK(sendCode("Escape", 9, false));
+                      KI_CHECK(sendCode("Escape", 9, true));
+                  })
+            .then(300, "keycodes, lost release: Control+Alt_R within the repeat gap passes, Control released first",
+                  [&] {
+                      KI_CHECK(!sendCode("Control_L", 37, false));
+                      KI_CHECK(!sendCode("Control+Alt_R", 108, false));
+                      KI_CHECK(!sendCode("Control+Alt+Control_L", 37, true));
+                      KI_CHECK(!sendCode("Alt+Alt_R", 108, true));
+                      committed(26);
+                      displayClear(ic());
+                  })
+            .then(0, "keycodes, lost release, after the gap: press Alt_R",
+                  [&] { KI_CHECK(sendCode("Alt_R", 108, false)); })
+            .then(300, "keycodes, lost release, after the gap: esc cancels",
+                  [&] {
+                      KI_CHECK(sendCode("Escape", 9, false));
+                      KI_CHECK(sendCode("Escape", 9, true));
+                  })
+            .then(1100, "keycodes, lost release, after the gap: Control+Alt_R passes, Alt_R released first",
+                  [&] {
+                      KI_CHECK(!sendCode("Control_L", 37, false));
+                      KI_CHECK(!sendCode("Control+Alt_R", 108, false));
+                      KI_CHECK(!sendCode("Control+Alt+Alt_R", 108, true));
+                      KI_CHECK(!sendCode("Control+Control_L", 37, true));
+                      committed(26);
+                      displayClear(ic());
+                  })
+            // Control+Alt_R during a held Control+space session belongs to the app;
+            // with Control released first its release arrives as Alt+Alt_R.
+            .then(0, "keycodes, mid-hold: press Control+space",
+                  [&] {
+                      setHotkeys("Control+space", "Alt_R");
+                      KI_CHECK(!sendCode("Control_L", 37, false));
+                      KI_CHECK(sendCode("Control+space", 65, false));
+                  })
+            .then(500, "keycodes, mid-hold: Control+Alt_R passes, Control released first, the session goes on",
+                  [&] {
+                      KI_CHECK(!sendCode("Control+Alt_R", 108, false));
+                      KI_CHECK(!sendCode("Control+Alt+Control_L", 37, true));
+                      KI_CHECK(!sendCode("Alt+Alt_R", 108, true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(900, "keycodes, mid-hold: release space", [&] { KI_CHECK(sendCode("space", 65, true)); })
+            .then(1500, "keycodes, mid-hold: committed",
+                  [&] {
+                      committed(27);
+                      displayClear(ic());
+                  })
+            .then(0, "keycodes, chord: press Alt_R",
+                  [&] {
+                      setHotkeys("Alt_R", "Alt+space");
+                      KI_CHECK(sendCode("Alt_R", 108, false));
+                  })
+            .then(700, "keycodes, chord: Alt+space while Alt_R is down is swallowed with its release",
+                  [&] {
+                      KI_CHECK(sendCode("Alt+space", 65, false));
+                      KI_CHECK(sendCode("Alt+space", 65, true));
+                  })
+            .then(600, "keycodes, chord: still recording, release Alt_R",
+                  [&] {
+                      KI_CHECK(ic()->inputPanel().auxUp().toString() == "Recording");
+                      KI_CHECK(sendCode("Alt+Alt_R", 108, true));
+                  })
+            .then(1500, "keycodes, chord: committed",
+                  [&] {
+                      committed(28);
+                      displayClear(ic());
+                      KI_CHECK(!sendCode("space", 65, false));
+                      KI_CHECK(!sendCode("space", 65, true));
+                  })
+            .then(0, "keycodes, chord repeat: press Alt_R", [&] { KI_CHECK(sendCode("Alt_R", 108, false)); })
+            .then(700, "keycodes, chord repeat: Alt+space", [&] { KI_CHECK(sendCode("Alt+space", 65, false)); })
+            .then(700, "keycodes, chord repeat: release Alt_R, a bare space repeat is swallowed",
+                  [&] {
+                      KI_CHECK(sendCode("Alt+Alt_R", 108, true));
+                      KI_CHECK(sendCode("space", 65, false));
+                  })
+            .then(500, "keycodes, chord repeat: later repeats are swallowed",
+                  [&] {
+                      KI_CHECK(sendKey(instance, uuid, Key(FcitxKey_space, KeyStates({KeyState::Repeat}), 65),
+                                       false));
+                      KI_CHECK(sendCode("space", 65, false));
+                  })
+            .then(500, "keycodes, chord repeat: the space release is swallowed",
+                  [&] { KI_CHECK(sendCode("space", 65, true)); })
+            .then(1500, "keycodes, chord repeat: committed",
+                  [&] {
+                      committed(29);
+                      displayClear(ic());
+                      KI_CHECK(!sendCode("space", 65, false));
+                      KI_CHECK(!sendCode("space", 65, true));
+                      setHotkey("Alt_R");
+                  })
             .then(0, "daemon killed: press",
                   [&] {
                       daemon.reset();
@@ -768,7 +922,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(23);
+                      committed(29);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -778,7 +932,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(24);
+                committed(30);
                 displayClear(ic());
             });
     } else {
