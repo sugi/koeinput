@@ -3,25 +3,29 @@
 
 Usage: scripts/gen-copyright [--check]
 
-One paragraph per vendored crate comes from `cargo metadata` (authors and the
-license expression), one paragraph covers the sherpa-onnx archive (the table
-below), and the license texts come from packaging/licenses/ or from a crate's
-own license file. Texts in /usr/share/common-licenses/ are referenced.
+One paragraph per vendored crate comes from `cargo metadata` (the license
+expression) and from the copyright lines in the crate's license files; the
+tables below add paragraphs for C code bundled inside some crates, for the
+sherpa-onnx archive and for packaging/licenses/. The license texts come from
+packaging/licenses/ or from a crate's own license file; texts in
+/usr/share/common-licenses/ are referenced.
 
 --check compares the result with the committed debian/copyright and exits 1
 with a diff when they differ.
 
-cargo has to run in the build container, so outside a container this script
-runs itself again through scripts/dev.
+cargo has to run in the build container, so outside it (scripts/dev sets
+KOEINPUT_IN_DEV_CONTAINER) this script runs itself again through scripts/dev.
 """
 
 import difflib
+import fnmatch
 import json
 import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+import textwrap
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,28 +43,45 @@ Copyright: 2026 Tatsuki Sugiura
 License: MIT or Apache-2.0
 """
 
+
+@dataclass
+class Paragraph:
+    """A Files paragraph; `license` is an SPDX expression."""
+
+    files: list
+    copyright: list
+    license: str
+    comment: list = dataclass_field(default_factory=list)
+
+
 # The sherpa-onnx component: the pinned no-TTS archive in packaging/sherpa-onnx.env.
 # Versions are the ones sherpa-onnx v1.13.8 pins in its cmake/*.cmake files;
 # packaging/licenses/README lists the commits. Update both with the pin.
-SHERPA_COPYRIGHT = [
-    "Xiaomi Corporation and other contributors (sherpa-onnx, kaldi-native-fbank, kaldi-decoder, kaldifst)",
-    "the Kaldi authors (code taken into kaldi-native-fbank, kaldi-decoder and kaldifst)",
-    "Microsoft Corporation (ONNX Runtime)",
-    "the authors of the third-party code in ONNX Runtime, listed in its ThirdPartyNotices",
-    "2005-2026 Google LLC (OpenFst)",
-    "2024 Wei Kang and other contributors (simple-sentencepiece)",
-    "2003-2010 Mark Borgerding (kissfft)",
-    "2011 Daniel Müllner, 2018 Christoph Dalitz (hclust-cpp)",
-    "2013-2025 Niels Lohmann (nlohmann/json)",
-    "the Eigen authors",
-]
-SHERPA_LICENSE = "Apache-2.0 and MIT and BSD-2-Clause and BSD-3-Clause and BSL-1.0 and MPL-2.0"
-SHERPA_COMMENT = """\
+SHERPA = [
+    Paragraph(
+        ["sherpaonnx/*"],
+        [
+            "Xiaomi Corporation and other contributors (sherpa-onnx, kaldi-native-fbank, kaldi-decoder, kaldifst)",
+            "the Kaldi authors (code taken into kaldi-native-fbank, kaldi-decoder and kaldifst)",
+            "Microsoft Corporation (ONNX Runtime)",
+            "the authors of the third-party code in ONNX Runtime, listed in its ThirdPartyNotices",
+            "2005-2026 Google LLC (OpenFst)",
+            "2024 Wei Kang and other contributors (simple-sentencepiece)",
+            "2008-2014 Susumu Yata (darts-clone, in simple-sentencepiece)",
+            "2012 Jakob Progsch, Václav Zeman (ThreadPool, in simple-sentencepiece)",
+            "2003-2010 Mark Borgerding (kissfft)",
+            "2011 Daniel Müllner, 2018 Christoph Dalitz (hclust-cpp)",
+            "2013-2025 Niels Lohmann (nlohmann/json)",
+            "the Eigen authors",
+        ],
+        "Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MPL-2.0 AND Zlib",
+        """\
 Static libraries from the sherpa-onnx v1.13.8 release, archive
 sherpa-onnx-v1.13.8-linux-x64-static-no-tts-lib.tar.bz2. It is built without
 text to speech, so it contains no espeak-ng, ucd-tools or piper-phonemize.
 The archive holds no source code and no license files. The license texts were
-taken from each upstream repository at the version sherpa-onnx v1.13.8 pins:
+taken from each upstream repository at the version sherpa-onnx v1.13.8 pins
+(copies in packaging/licenses/):
 
 sherpa-onnx 1.13.8 (k2-fsa/sherpa-onnx): Apache-2.0
 ONNX Runtime 1.28.2 (microsoft/onnxruntime): MIT. The third-party code it
@@ -72,13 +93,147 @@ kissfft, commit febd4caeed32e33ad8b2e0bb5ea77542c40f18ec (mborgerding/kissfft): 
 kaldi-decoder 0.3.0 (k2-fsa/kaldi-decoder): Apache-2.0
 kaldifst 1.8.0 (k2-fsa/kaldifst, pinned by kaldi-decoder): Apache-2.0
 OpenFst 1.8.5-2026-07-09 (csukuangfj/openfst): Apache-2.0
-simple-sentencepiece 0.7 (pkufool/simple-sentencepiece): Apache-2.0
+simple-sentencepiece 0.7 (pkufool/simple-sentencepiece): Apache-2.0. It
+  includes darts-clone 0.32 (ssentencepiece/csrc/darts.h): BSD-2-Clause, and
+  progschj/ThreadPool (ssentencepiece/csrc/threadpool.h): Zlib
 hclust-cpp 2026-02-25, fastcluster (csukuangfj/hclust-cpp): BSD-2-Clause
 nlohmann/json 3.12.0: MIT
-Eigen 5.0.1, header-only: MPL-2.0, with some files under BSD and other
-  MPL-2.0-compatible licenses. Source code:
-  https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz
-"""
+Eigen, header-only: MPL-2.0, with some files under BSD and other
+  MPL-2.0-compatible licenses. Two copies are compiled in; their source code:
+  - Eigen 5.0.1, used by sherpa-onnx and the libraries it builds:
+    https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz
+  - Eigen at commit 1d8b82b0740839c0de7f1242a3585e3390ff5f33 (3.4 branch),
+    used by ONNX Runtime 1.28.2 (its cmake/deps.txt):
+    https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip
+""".splitlines(),
+    ),
+    Paragraph(
+        ["sherpaonnx/lib/libsherpa-onnx-portaudio_static.a"],
+        ["1999-2006 Ross Bencina and Phil Burk, and other PortAudio contributors"],
+        "MIT",
+        [
+            "PortAudio v19.7.0 (pa_stable_v190700_20210406), built by sherpa-onnx.",
+            "It is in the source package only: sherpa-onnx-sys does not link it, so",
+            "it is not in the KoeInput binaries. Its license text",
+            "(packaging/licenses/portaudio-19.7.0-LICENSE.txt) adds non-binding requests",
+            "that modifications be sent to the original developer.",
+        ],
+    ),
+]
+
+NOT_LINKED = ["It is a build dependency of sherpa-onnx-sys; nothing of it is linked",
+              "into the KoeInput binaries."]
+
+# C code bundled inside vendored crates under licenses other than the crate's own.
+# Patterns are relative to the crate's directory and must match files.
+BUNDLED = {
+    "lzma-sys": [
+        Paragraph(
+            ["xz-5.2/*"],
+            ["Lasse Collin and the other XZ Utils authors (see xz-5.2/AUTHORS)"],
+            "public-domain",
+            [
+                "XZ Utils 5.2, bundled by lzma-sys. lzma-sys builds only liblzma, which is",
+                "in the public domain.",
+                *NOT_LINKED,
+                "The files in the next paragraphs are under other licenses; they are",
+                "build files, the getopt replacement and scripts, which are not built.",
+            ],
+        ),
+        Paragraph(
+            ["xz-5.2/Doxyfile.in", "xz-5.2/extra/scanlzma/scanlzma.c", "xz-5.2/lib/Makefile.am",
+             "xz-5.2/lib/getopt_int.h", "xz-5.2/src/scripts/xzdiff.*", "xz-5.2/src/scripts/xzgrep.*",
+             "xz-5.2/src/scripts/xzless.in", "xz-5.2/src/scripts/xzmore.*"],
+            ["1989-2007 Free Software Foundation, Inc.", "1993 Jean-loup Gailly",
+             "1997-2007 Dimitri van Heesch", "2006 Timo Lindfors"],
+            "GPL-2.0-or-later",
+        ),
+        Paragraph(
+            ["xz-5.2/lib/getopt.c", "xz-5.2/lib/getopt.in.h", "xz-5.2/lib/getopt1.c"],
+            ["1987-2006 Free Software Foundation, Inc."],
+            "LGPL-2.1-or-later",
+        ),
+        Paragraph(
+            ["xz-5.2/m4/ax_pthread.m4"],
+            ["2008 Steven G. Johnson", "2011 Daniel Richard G.", "2019 Marc Stevens"],
+            "GPL-3.0-or-later WITH Autoconf-exception-macro",
+        ),
+        Paragraph(
+            ["xz-5.2/m4/getopt.m4", "xz-5.2/m4/posix-shell.m4", "xz-5.2/m4/visibility.m4"],
+            ["2002-2020 Free Software Foundation, Inc."],
+            "FSFULLR",
+        ),
+        Paragraph(
+            ["xz-5.2/INSTALL.generic", "xz-5.2/m4/ax_check_capsicum.m4"],
+            ["1994-2016 Free Software Foundation, Inc.", "2014 Google Inc.", "2015 Lasse Collin"],
+            "FSFAP",
+        ),
+    ],
+    "bzip2-sys": [
+        Paragraph(
+            ["bzip2-1.0.8/*"],
+            ["1996-2019 Julian R Seward"],
+            "bzip2-1.0.6",
+            [
+                "bzip2 1.0.8, bundled by bzip2-sys.",
+                *NOT_LINKED,
+                "bzdiff, bzgrep and bzmore are adapted from gzip's zdiff, zgrep and zmore",
+                "and state no license of their own; bzip2-sys does not use them.",
+            ],
+        ),
+    ],
+    "zstd-sys": [
+        Paragraph(
+            ["zstd/*"],
+            ["Meta Platforms, Inc. and affiliates", "Yann Collet", "2016 Tino Reichardt"],
+            "BSD-3-Clause OR GPL-2.0-only",
+            [
+                "Zstandard 1.5.7, bundled by zstd-sys.",
+                *NOT_LINKED,
+                "Zstandard is dual-licensed; it is used here under BSD-3-Clause.",
+            ],
+        ),
+        Paragraph(
+            ["zstd/lib/dictBuilder/divsufsort.c", "zstd/lib/dictBuilder/divsufsort.h"],
+            ["2003-2008 Yuta Mori"],
+            "MIT",
+        ),
+        Paragraph(
+            ["zstd/build/cmake/CMakeModules/JoinPaths.cmake"],
+            ["2020 Jan Tojnar"],
+            "MIT OR CC0-1.0",
+        ),
+    ],
+}
+
+# The license files in packaging/licenses/, by the project they were copied from.
+# Every file there except README must match one of these.
+REPO_LICENSE_FILES = [
+    Paragraph(["packaging/licenses/onnxruntime-1.28.2-*"], ["Microsoft Corporation"], "MIT",
+              ["Copies of the license files of the code in sherpaonnx/, taken from each",
+               "project's repository (see packaging/licenses/README)."]),
+    Paragraph(["packaging/licenses/sherpa-onnx-1.13.8-LICENSE",
+               "packaging/licenses/kaldi-native-fbank-1.22.3-LICENSE",
+               "packaging/licenses/kaldi-decoder-0.3.0-LICENSE",
+               "packaging/licenses/kaldifst-1.8.0-LICENSE"],
+              ["Xiaomi Corporation and other contributors"], "Apache-2.0"),
+    Paragraph(["packaging/licenses/openfst-1.8.5-2026-07-09-COPYING"], ["2005-2026 Google LLC"],
+              "Apache-2.0"),
+    Paragraph(["packaging/licenses/simple-sentencepiece-0.7-LICENSE"],
+              ["2024 Wei Kang and other contributors"], "Apache-2.0"),
+    Paragraph(["packaging/licenses/simple-sentencepiece-0.7-darts.h-header"],
+              ["2008-2014 Susumu Yata"], "BSD-2-Clause"),
+    Paragraph(["packaging/licenses/simple-sentencepiece-0.7-threadpool.h-header"],
+              ["2012 Jakob Progsch, Václav Zeman"], "Zlib"),
+    Paragraph(["packaging/licenses/kissfft-*"], ["2003-2010 Mark Borgerding"], "BSD-3-Clause"),
+    Paragraph(["packaging/licenses/hclust-LICENSE"],
+              ["2011 Daniel Müllner", "2018 Christoph Dalitz"], "BSD-2-Clause"),
+    Paragraph(["packaging/licenses/nlohmann-json-3.12.0-LICENSE.MIT"], ["2013-2025 Niels Lohmann"],
+              "MIT"),
+    Paragraph(["packaging/licenses/eigen-5.0.1-*"], ["the Eigen authors"], "MPL-2.0"),
+    Paragraph(["packaging/licenses/portaudio-19.7.0-LICENSE.txt"],
+              ["1999-2006 Ross Bencina and Phil Burk"], "MIT"),
+]
 
 STUB_COMMENT = [
     "Stub made by cargo-vendor-filterer: the crate's Cargo.toml and an empty",
@@ -90,6 +245,9 @@ COMMON_LICENSES = {
     "Apache-2.0": ("Apache-2.0", "the Apache License, Version 2.0"),
     "BSL-1.0": ("BSL-1.0", "the Boost Software License, Version 1.0"),
     "CC0-1.0": ("CC0-1.0", "the Creative Commons CC0 1.0 Universal license"),
+    "GPL-2.0-only": ("GPL-2", "the GNU General Public License, version 2"),
+    "GPL-2.0-or-later": ("GPL-2", "the GNU General Public License, version 2"),
+    "GPL-3.0-or-later": ("GPL-3", "the GNU General Public License, version 3"),
     "LGPL-2.1-or-later": ("LGPL-2.1", "the GNU Lesser General Public License, version 2.1"),
     "MPL-2.0": ("MPL-2.0", "the Mozilla Public License, Version 2.0"),
 }
@@ -99,12 +257,14 @@ COMMON_LICENSES = {
 class Text:
     """A license text: a file in the repository or in a crate, optionally cut to the
     lines from `start` up to (not including) `stop`, to drop copyright lines and
-    remarks that belong to that one project."""
+    remarks that belong to that one project. `prefix` is a comment marker to
+    remove from every line first."""
 
     file: str
     crate: str = ""
     start: str = ""
     stop: str = ""
+    prefix: str = ""
 
 
 LICENSE_TEXTS = {
@@ -112,21 +272,36 @@ LICENSE_TEXTS = {
     "BSD-2-Clause": Text("packaging/licenses/hclust-LICENSE", start=r"Redistribution and use"),
     "BSD-3-Clause": Text("packaging/licenses/kissfft-BSD-3-Clause", start=r"Redistribution and use"),
     "bzip2-1.0.6": Text("LICENSE", crate="libbz2-rs-sys", start=r"Redistribution and use",
-                        stop=r"Julian Seward, jseward"),
+                        stop=r"-{20}"),
     "CDLA-Permissive-2.0": Text("LICENSE", crate="webpki-roots"),
+    "FSFAP": Text("xz-5.2/m4/ax_check_capsicum.m4", crate="lzma-sys", prefix=r"#\s*",
+                  start=r"Copying and distribution", stop=r"$"),
+    "FSFULLR": Text("xz-5.2/m4/getopt.m4", crate="lzma-sys", prefix=r"dnl\s?",
+                    start=r"This file is free software", stop=r"$"),
     "ISC": Text("LICENSE", crate="rustls-webpki", start=r"Permission to use",
                 stop=r"The files under third-party"),
     "MIT": Text("LICENSE-MIT", crate="anyhow"),
     "MIT-0": Text("LICENSE-MIT0", crate="constant_time_eq"),
+    "public-domain": Text("xz-5.2/COPYING", crate="lzma-sys", start=r"You can do whatever you want",
+                          stop=r"As usual, this software"),
     "Unicode-3.0": Text("LICENSE-UNICODE", crate="unicode-ident"),
     "Unlicense": Text("UNLICENSE", crate="memchr"),
     "Zlib": Text("LICENSE", crate="zlib-rs", start=r"This software is provided"),
 }
 
 EXCEPTION_TEXTS = {
+    "Autoconf-exception-macro": Text("xz-5.2/m4/ax_pthread.m4", crate="lzma-sys", prefix=r"#\s*",
+                                     start=r"As a special exception", stop=r"serial \d+"),
     "LLVM-exception": Text("LICENSE-Apache-2.0_WITH_LLVM-exception", crate="rustix",
                            start=r"--- LLVM Exceptions"),
 }
+
+# Copyright notices of a crate come from these files (any directory).
+NOTICE_FILE = re.compile(r"(?i)^(licen[cs]e|copying|copyright|notice|unlicense)")
+PLACEHOLDER = re.compile(r"(?i)[\[{<]\s*(yyyy|year|name|owner|copyright|fullname|author)")
+NOT_A_NOTICE = re.compile(
+    r"(?i)^copyright\s*(and|notice|license|holders?|owners?|laws?|interest|statement|protection)\b|^copyright\s*$"
+)
 
 
 class Error(Exception):
@@ -241,6 +416,7 @@ def license_names(node, out):
     return out
 
 
+
 # Text formatting -----------------------------------------------------------------
 
 def field(name, lines):
@@ -252,8 +428,9 @@ def field(name, lines):
     return "\n".join(out)
 
 
-def clean_lines(text):
-    lines = [line.rstrip().expandtabs() for line in text.lstrip("﻿").splitlines()]
+def clean_lines(lines):
+    text = textwrap.dedent("\n".join(l.rstrip().expandtabs() for l in lines))
+    lines = text.lstrip("﻿").splitlines()
     while lines and not lines[0]:
         lines.pop(0)
     while lines and not lines[-1]:
@@ -261,29 +438,30 @@ def clean_lines(text):
     return lines
 
 
+def crate_dir(crates, name, what):
+    if name not in crates:
+        raise Error(f"crate {name} is no longer vendored; update {what} in scripts/gen-copyright")
+    return crates[name]
+
+
 def read_text(spec, crates):
-    if spec.crate:
-        if spec.crate not in crates:
-            raise Error(
-                f"the license text source crate {spec.crate} is no longer vendored; "
-                "pick another source in LICENSE_TEXTS or EXCEPTION_TEXTS"
-            )
-        path = crates[spec.crate] / spec.file
-    else:
-        path = ROOT / spec.file
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
+    path = crate_dir(crates, spec.crate, "LICENSE_TEXTS or EXCEPTION_TEXTS") / spec.file \
+        if spec.crate else ROOT / spec.file
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if spec.prefix:
+        lines = [re.sub("^" + spec.prefix, "", line) for line in lines]
+
+    def find(pattern, lines):
+        index = next((i for i, l in enumerate(lines) if re.match(pattern, l.lstrip())), None)
+        if index is None:
+            raise Error(f"{path}: no line starts with {pattern!r}")
+        return index
+
     if spec.start:
-        index = next((i for i, l in enumerate(lines) if re.match(spec.start, l.lstrip())), None)
-        if index is None:
-            raise Error(f"{path}: no line starts with {spec.start!r}")
-        lines = lines[index:]
+        lines = lines[find(spec.start, lines):]
     if spec.stop:
-        index = next((i for i, l in enumerate(lines) if re.match(spec.stop, l.lstrip())), None)
-        if index is None:
-            raise Error(f"{path}: no line starts with {spec.stop!r}")
-        lines = lines[:index]
-    return clean_lines("\n".join(lines))
+        lines = lines[:find(spec.stop, lines)]
+    return clean_lines(lines)
 
 
 def common_pointer(license_id):
@@ -308,7 +486,73 @@ def license_paragraph(name, license_id, exception, crates):
     return field("License", [name] + body)
 
 
+# Copyright notices -----------------------------------------------------------------
+
+def notices_in(text):
+    """The copyright lines of a license file, without the placeholders of license
+    templates and the sentences of license texts that mention copyright."""
+    found = []
+    for raw in text.splitlines():
+        line = re.sub(r"\s+", " ", re.sub(r"^[\s#/*;!-]+", "", raw)).strip()
+        lower = line.lower()
+        notice = None
+        if lower.startswith("copyright"):
+            notice = None if NOT_A_NOTICE.match(line) else line
+        elif lower.startswith("(c)") or line.startswith("©"):
+            notice = line if re.match(r"(?i)(\(c\)|©)\s*\d{4}", line) else None
+        else:
+            match = re.search(r"(?i)\bcopyright\s*(\(c\)|©)?\s*\d{4}", line)
+            if match:
+                notice = line[match.start():]
+            elif re.search(r"©\s*\d{4}", line):
+                notice = line
+        if notice and not PLACEHOLDER.search(notice) and notice not in found:
+            found.append(notice)
+    return found
+
+
+def crate_files(directory):
+    for parent, dirs, files in os.walk(directory):
+        dirs.sort()
+        for name in sorted(files):
+            path = Path(parent) / name
+            yield path.relative_to(directory).as_posix(), path
+
+
+def crate_notices(directory, skip):
+    """Copyright lines from the license and notice files of a crate, leaving out
+    the files that `skip` (DEP-5 patterns of bundled code) covers."""
+    found = []
+    for relative, path in crate_files(directory):
+        if not NOTICE_FILE.match(path.name) or any(fnmatch.fnmatchcase(relative, p) for p in skip):
+            continue
+        for notice in notices_in(path.read_text(encoding="utf-8", errors="replace")):
+            if notice not in found:
+                found.append(notice)
+    return found
+
+
 # The file ------------------------------------------------------------------------
+
+def files_paragraph(paragraph, needed, prefix=""):
+    node = parse(paragraph.license)
+    license_names(node, needed)
+    lines = [
+        field("Files", [prefix + p for p in paragraph.files]),
+        field("Copyright", paragraph.copyright),
+        f"License: {to_dep5(node)}",
+    ]
+    if paragraph.comment:
+        lines.append(field("Comment", paragraph.comment))
+    return "\n".join(lines)
+
+
+def check_patterns(paragraphs, files, where):
+    for paragraph in paragraphs:
+        for pattern in paragraph.files:
+            if not any(fnmatch.fnmatchcase(f, pattern) for f in files):
+                raise Error(f"{where}: the pattern {pattern} matches no file")
+
 
 def generate():
     full = cargo_metadata()
@@ -319,37 +563,41 @@ def generate():
         (p for p in full["packages"] if p["id"] not in members),
         key=lambda p: (p["name"], p["version"]),
     )
-
-    # One version of each crate, for the license texts taken from crates.
-    crates = {}
-    for p in packages:
-        crates[p["name"]] = Path(p["manifest_path"]).parent
+    crates = {p["name"]: Path(p["manifest_path"]).parent for p in packages}
+    for name in BUNDLED:
+        crate_dir(crates, name, "BUNDLED")
 
     needed = {}
-    paragraphs = [HEADER.rstrip("\n")]
     license_names(parse("MIT OR Apache-2.0"), needed)
+    paragraphs = [HEADER.rstrip("\n")]
+
+    licenses = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "packaging/licenses").iterdir())
+    check_patterns(REPO_LICENSE_FILES, licenses, "REPO_LICENSE_FILES")
+    for name in licenses:
+        if name != "packaging/licenses/README" and not any(
+            fnmatch.fnmatchcase(name, p) for par in REPO_LICENSE_FILES for p in par.files
+        ):
+            raise Error(f"{name} is in no paragraph of REPO_LICENSE_FILES")
+    paragraphs += [files_paragraph(p, needed) for p in REPO_LICENSE_FILES]
+
     for p in packages:
         if not p["license"]:
             raise Error(f"{p['name']} {p['version']} declares no SPDX license (license-file only)")
-        node = parse(p["license"])
-        license_names(node, needed)
-        authors = [a.strip() for a in p["authors"] if a.strip()] or [f"{p['name']} contributors"]
-        lines = [
-            f"Files: vendor/{p['name']}-{p['version']}/*",
-            field("Copyright", authors),
-            f"License: {to_dep5(node)}",
-        ]
-        if p["id"] not in built_ids:
-            lines.append(field("Comment", STUB_COMMENT))
-        paragraphs.append("\n".join(lines))
+        directory = Path(p["manifest_path"]).parent
+        bundled = BUNDLED.get(p["name"], [])
+        skip = [pattern for b in bundled for pattern in b.files]
+        copyright = (crate_notices(directory, skip)
+                     or [a.strip() for a in p["authors"] if a.strip()]
+                     or [f"{p['name']} contributors"])
+        stub = p["id"] not in built_ids
+        prefix = f"vendor/{p['name']}-{p['version']}/"
+        paragraphs.append(files_paragraph(
+            Paragraph(["*"], copyright, p["license"], STUB_COMMENT if stub else []), needed, prefix))
+        if bundled and not stub:
+            check_patterns(bundled, [f for f, _ in crate_files(directory)], f"BUNDLED[{p['name']}]")
+            paragraphs += [files_paragraph(b, needed, prefix) for b in bundled]
 
-    license_names(parse(SHERPA_LICENSE.replace(" and ", " AND ")), needed)
-    paragraphs.append("\n".join([
-        "Files: sherpaonnx/*",
-        field("Copyright", SHERPA_COPYRIGHT),
-        f"License: {SHERPA_LICENSE}",
-        field("Comment", SHERPA_COMMENT.splitlines()),
-    ]))
+    paragraphs += [files_paragraph(p, needed) for p in SHERPA]
 
     for name in sorted(needed, key=str.lower):
         license_id, exception = needed[name]
@@ -357,15 +605,11 @@ def generate():
     return "\n\n".join(paragraphs) + "\n"
 
 
-def in_container():
-    return Path("/run/.containerenv").exists()
-
-
 def main(argv):
     if argv not in ([], ["--check"]):
         print("usage: scripts/gen-copyright [--check]", file=sys.stderr)
         return 2
-    if not in_container():
+    if os.environ.get("KOEINPUT_IN_DEV_CONTAINER") != "1":
         os.execv(ROOT / "scripts" / "dev",
                  [str(ROOT / "scripts" / "dev"), "python3", "scripts/gen-copyright", *argv])
     target = ROOT / "debian" / "copyright"

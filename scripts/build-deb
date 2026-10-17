@@ -25,7 +25,13 @@ esac
 if [ -n "$(git status --porcelain -- . ':(exclude)debian')" ]; then
   die "commit the changes outside debian/ first; the build takes them from HEAD"
 fi
+# debian/ comes from the work tree, so a stray file there would end up in the
+# source package.
+untracked=$(git ls-files --others -- debian)
+[ -z "$untracked" ] || die "untracked files in debian/ (add or remove them):
+$untracked"
 scripts/gen-copyright --check
+. packaging/sherpa-onnx.env
 
 version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
 [ -n "$version" ] || die "cannot read the version from debian/changelog"
@@ -46,7 +52,23 @@ if [ $current = yes ]; then
   git archive --format=tar --prefix="koeinput-$upstream/" HEAD -- . ':(exclude)debian' >"$tmp/main.tar"
   xz -dc "target/deb/$base.orig.tar.xz" | cmp -s - "$tmp/main.tar" || current=no
 fi
-[ $current = yes ] || scripts/make-orig
+if [ $current = no ]; then
+  [ -z "$(git status --porcelain)" ] || die "the orig tarballs are missing or older than HEAD,
+and scripts/make-orig needs a clean tree: commit the changes in debian/ (or set
+them aside), run scripts/make-orig, then run scripts/build-deb again"
+  scripts/make-orig
+fi
+sum=$(sha256sum "target/deb/$base.orig-sherpaonnx.tar.bz2" | cut -d' ' -f1)
+[ "$sum" = "$SHERPA_ONNX_SHA256" ] ||
+  die "target/deb/$base.orig-sherpaonnx.tar.bz2 has SHA-256 $sum, not the pinned $SHERPA_ONNX_SHA256"
+
+# Every vendored crate directory needs its own paragraph in debian/copyright.
+tar -tJf "target/deb/$base.orig-vendor.tar.xz" | sed -n 's|^vendor/\([^/]*\)/.*|\1|p' | sort -u >"$tmp/vendored"
+sed -n 's|^Files: vendor/\([^/]*\)/\*$|\1|p' debian/copyright | sort >"$tmp/listed"
+if ! cmp -s "$tmp/vendored" "$tmp/listed"; then
+  diff "$tmp/vendored" "$tmp/listed" >&2 || true
+  die "the crates in the vendor tarball (<) and the Files: vendor/ paragraphs of debian/copyright (>) differ"
+fi
 
 containerfile=packaging/containers/deb-$dist.Containerfile
 image="localhost/koeinput-deb-$dist:$(sha256sum "$containerfile" | cut -c1-12)"
@@ -78,7 +100,7 @@ dpkg-source -x ${BASE}-$REVISION.dsc build
 (cd build && dpkg-buildpackage -us -uc -b -Jauto)
 status=0
 lintian -EvIL +pedantic --fail-on error,warning \
-  --suppress-tags initial-upload-closes-no-bugs,no-homepage-field,debian-watch-file-is-missing,spelling-error-in-binary \
+  --suppress-tags initial-upload-closes-no-bugs,no-homepage-field,debian-watch-file-is-missing \
   ${BASE}-${REVISION}_amd64.changes >lintian.txt 2>&1 || status=$?
 cat lintian.txt
 cp *.deb *.changes *.buildinfo *.dsc *.debian.tar.* lintian.txt /out/

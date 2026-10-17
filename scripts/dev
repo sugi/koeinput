@@ -36,5 +36,5 @@ exec nice -n 10 podman run --rm -i --userns=keep-id \
   -v "$root/work/cache/cargo-git:/usr/local/cargo/git" \
   -e CARGO_TARGET_DIR=/src/target \
   -e KOEINPUT_MODEL_TESTS -e KOEINPUT_TEST_MODELS_DIR -e KOEINPUT_AUDIO_TESTS \
-  -e KOEINPUT_TEST_DAEMON ${sherpa:+-e "$sherpa"} \
+  -e KOEINPUT_TEST_DAEMON -e KOEINPUT_IN_DEV_CONTAINER=1 ${sherpa:+-e "$sherpa"} \
   "$image" "$@"

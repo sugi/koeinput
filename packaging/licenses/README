@@ -33,6 +33,14 @@ openfst-1.8.5-2026-07-09-COPYING          csukuangfj/openfst v1.8.5-2026-07-09, 
                                           https://raw.githubusercontent.com/csukuangfj/openfst/v1.8.5-2026-07-09/COPYING
 simple-sentencepiece-0.7-LICENSE          simple-sentencepiece v0.7, 62dd423df1d51da5ea06f1c3a046fc04f01b4f39
                                           https://raw.githubusercontent.com/pkufool/simple-sentencepiece/v0.7/LICENSE
+simple-sentencepiece-0.7-darts.h-header
+                                          simple-sentencepiece v0.7, 62dd423df1d51da5ea06f1c3a046fc04f01b4f39: the license
+                                          comment (lines 1-29) of ssentencepiece/csrc/darts.h, a copy of darts-clone 0.32
+                                          https://raw.githubusercontent.com/pkufool/simple-sentencepiece/v0.7/ssentencepiece/csrc/darts.h
+simple-sentencepiece-0.7-threadpool.h-header
+                                          simple-sentencepiece v0.7, 62dd423df1d51da5ea06f1c3a046fc04f01b4f39: the license
+                                          comment (lines 1-25) of ssentencepiece/csrc/threadpool.h, a copy of progschj/ThreadPool
+                                          https://raw.githubusercontent.com/pkufool/simple-sentencepiece/v0.7/ssentencepiece/csrc/threadpool.h
 hclust-LICENSE                            hclust-cpp 2026-02-25, db76039198979ce8d03632ab6ef14fe6accb127c
                                           https://raw.githubusercontent.com/csukuangfj/hclust-cpp/2026-02-25/LICENSE
 nlohmann-json-3.12.0-LICENSE.MIT          nlohmann/json v3.12.0, 55f93686c01528224f448c19128836e7df245f72
@@ -41,5 +49,8 @@ eigen-5.0.1-COPYING.MPL2                  Eigen 5.0.1, bc3b39870ecb690a623a3f491
                                           https://gitlab.com/libeigen/eigen/-/raw/5.0.1/COPYING.MPL2
 eigen-5.0.1-COPYING.README                Eigen 5.0.1, bc3b39870ecb690a623a3f49149a358b95c5781d
                                           https://gitlab.com/libeigen/eigen/-/raw/5.0.1/COPYING.README
+portaudio-19.7.0-LICENSE.txt              PortAudio v19.7.0, 147dd722548358763a8b649b3e4b41dfffbcfbb6 (pa_stable_v190700_20210406,
+                                          pinned by sherpa-onnx; libsherpa-onnx-portaudio_static.a, which KoeInput does not link)
+                                          https://raw.githubusercontent.com/PortAudio/portaudio/v19.7.0/LICENSE.txt
 
 The commits are the tag targets from `git ls-remote` on 2026-10-18.
