@@ -813,15 +813,20 @@ void buffered_session_cancelled_on_start_failure() {
     CHECK_LOG(f.a.take(), "cancel 9", "untimer", "clear", "notify NoResponse");
 }
 
-void buffered_session_cancelled_when_daemon_leaves_while_starting() {
+// The buffered session died with the daemon. A Cancel would go to the bus
+// name and could start a new daemon, and its id would shadow the next
+// daemon's session 9.
+void buffered_session_not_cancelled_when_daemon_leaves_while_starting() {
     Fixture f;
     f.c.hotkeyPress(0, true, true);
     f.c.escape();
     f.a.take();
     f.c.stateChanged(9, "starting");
     f.c.daemonLeft();
-    CHECK_LOG(f.a.take(), "cancel 9", "untimer");
+    CHECK_LOG(f.a.take(), "untimer");
     CHECK(f.c.idle());
+    f.c.stateChanged(9, "recording");
+    CHECK_LOG(f.a.take(), "cancel 9");
 }
 
 void finished_session_signals_do_not_cancel() {
@@ -910,7 +915,7 @@ int main() {
         T(buffered_sessions_cancelled_when_start_watchdog_fires),
         T(buffered_session_not_cancelled_twice_by_late_reply),
         T(buffered_session_cancelled_on_start_failure),
-        T(buffered_session_cancelled_when_daemon_leaves_while_starting),
+        T(buffered_session_not_cancelled_when_daemon_leaves_while_starting),
 #undef T
     };
     for (auto &t : tests) {
