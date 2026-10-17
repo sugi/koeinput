@@ -1,4 +1,4 @@
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender};
 use libpulse_binding::{
     def::BufferAttr,
     sample::{Format, Spec},
@@ -8,8 +8,10 @@ use libpulse_simple_binding::Simple;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 const CHUNK_BYTES: usize = 1280;
+const STOP_WAIT: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 pub enum CaptureMsg {
@@ -21,19 +23,26 @@ pub enum CaptureMsg {
 pub struct Capture {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    done: Receiver<()>,
 }
 
 impl Capture {
+    /// `tx` should be unbounded: a full bounded channel would block the capture thread.
     pub fn start(source: Option<String>, tx: Sender<CaptureMsg>) -> Capture {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        let (done_tx, done) = crossbeam_channel::bounded(1);
         let handle = std::thread::Builder::new()
             .name("koeinput-capture".into())
-            .spawn(move || run(source, tx, flag))
+            .spawn(move || {
+                run(source, tx, flag);
+                let _ = done_tx.send(());
+            })
             .expect("spawn capture thread");
         Capture {
             stop,
             handle: Some(handle),
+            done,
         }
     }
 
@@ -44,8 +53,16 @@ impl Capture {
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.handle.take() {
-            let _ = h.join();
+            join_or_detach(h, &self.done, STOP_WAIT);
         }
+    }
+}
+
+/// A thread stuck in a blocking PulseAudio call cannot see the stop flag; detach it
+/// instead of hanging the caller. It exits on its own after its next read or failed send.
+fn join_or_detach(handle: JoinHandle<()>, done: &Receiver<()>, wait: Duration) {
+    if done.recv_timeout(wait).is_ok() {
+        let _ = handle.join();
     }
 }
 
@@ -105,6 +122,18 @@ fn run(source: Option<String>, tx: Sender<CaptureMsg>, stop: Arc<AtomicBool>) {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn shutdown_does_not_hang_on_stalled_thread() {
+        let (done_tx, done) = crossbeam_channel::bounded(1);
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(5));
+            let _ = done_tx.send(());
+        });
+        let start = std::time::Instant::now();
+        join_or_detach(handle, &done, Duration::from_millis(100));
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn unreachable_server_reports_error() {
