@@ -53,6 +53,8 @@ public:
 class Controller {
 public:
     static constexpr uint64_t kRepeatGapMs = 1000;
+    // Longer than the Start call timeout, so it fires only when no reply comes at all.
+    static constexpr uint64_t kStartTimeoutMs = 6000;
     static constexpr uint64_t kFinalizeTimeoutMs = 10000;
     static constexpr std::size_t kMaxBuffered = 64;
 
@@ -93,7 +95,10 @@ private:
     void requestStop();
     void cancel();
     void finish();
-    void startWatchdog();
+    void startWatchdog(uint64_t ms);
+    void stopWatchdog();
+    void cancelSession(uint32_t id);
+    void cancelStray(uint32_t id);
     void showRecording();
     void releaseDisplay();
     bool current(uint32_t id) const { return id_ && *id_ == id; }
@@ -115,6 +120,7 @@ private:
     bool pendingCancel_ = false;
     bool displayReleased_ = false;
     bool timerRunning_ = false;
+    std::optional<uint32_t> lastCancelledId_;
     std::vector<Buffered> buffered_;
 };
 

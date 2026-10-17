@@ -6,7 +6,8 @@ namespace koeinput {
 
 CallError callErrorFromName(const std::string &name) {
     if (name == "org.freedesktop.DBus.Error.ServiceUnknown" ||
-        name == "org.freedesktop.DBus.Error.NameHasNoOwner") {
+        name == "org.freedesktop.DBus.Error.NameHasNoOwner" ||
+        name.starts_with("org.freedesktop.DBus.Error.Spawn.")) {
         return CallError::NoDaemon;
     }
     if (name == "org.nemui.KoeInput.Error.NoModel") return CallError::NoModel;
@@ -93,11 +94,12 @@ void Controller::focusLost() { cancel(); }
 
 void Controller::startReply(uint32_t id) {
     if (phase_ != Phase::Starting) {
-        actions_.callCancel(id);
+        cancelStray(id);
         return;
     }
+    stopWatchdog();
     if (pendingCancel_) {
-        actions_.callCancel(id);
+        cancelSession(id);
         finish();
         return;
     }
@@ -138,7 +140,10 @@ void Controller::stateChanged(uint32_t id, const std::string &state) {
         buffer(SignalKind::State, id, state);
         return;
     }
-    if (!current(id)) return;
+    if (!current(id)) {
+        if (state == "starting" || state == "recording") cancelStray(id);
+        return;
+    }
     if (state == "recording") {
         daemonRecording_ = true;
         if (phase_ == Phase::Active) showRecording();
@@ -146,7 +151,7 @@ void Controller::stateChanged(uint32_t id, const std::string &state) {
         if (phase_ == Phase::Active) {
             phase_ = Phase::Finalizing;
             if (!displayReleased_) actions_.showStatus(Status::Finalizing);
-            startWatchdog();
+            startWatchdog(kFinalizeTimeoutMs);
         }
     } else if (state == "done" || state == "cancelled" || state == "error") {
         finish();
@@ -158,7 +163,11 @@ void Controller::partial(uint32_t id, const std::string &text) {
         buffer(SignalKind::Partial, id, text);
         return;
     }
-    if (!current(id) || !settings_.showPartial || displayReleased_) return;
+    if (!current(id)) {
+        cancelStray(id);
+        return;
+    }
+    if (!settings_.showPartial || displayReleased_) return;
     actions_.showPartial(text);
 }
 
@@ -194,8 +203,14 @@ void Controller::daemonLeft() {
 
 void Controller::timerFired() {
     timerRunning_ = false;
+    if (phase_ == Phase::Starting) {
+        const bool quiet = pendingCancel_;
+        finish();
+        if (!quiet) actions_.notify(Notice::NoResponse, "");
+        return;
+    }
     if (phase_ != Phase::Finalizing) return;
-    actions_.callCancel(*id_);
+    cancelSession(*id_);
     finish();
     actions_.notify(Notice::NoResponse, "");
 }
@@ -211,6 +226,7 @@ void Controller::begin(uint64_t nowMs) {
     displayReleased_ = false;
     buffered_.clear();
     actions_.showStatus(Status::Preparing);
+    startWatchdog(kStartTimeoutMs);
     actions_.callStart();
 }
 
@@ -222,7 +238,7 @@ void Controller::requestStop() {
     if (phase_ != Phase::Active) return;
     phase_ = Phase::Finalizing;
     if (!displayReleased_) actions_.showStatus(Status::Finalizing);
-    startWatchdog();
+    startWatchdog(kFinalizeTimeoutMs);
     actions_.callStop(*id_);
 }
 
@@ -239,17 +255,14 @@ void Controller::cancel() {
         return;
     case Phase::Active:
     case Phase::Finalizing:
-        actions_.callCancel(*id_);
+        cancelSession(*id_);
         finish();
         return;
     }
 }
 
 void Controller::finish() {
-    if (timerRunning_) {
-        actions_.stopTimer();
-        timerRunning_ = false;
-    }
+    stopWatchdog();
     if (!displayReleased_) actions_.clearDisplay();
     phase_ = Phase::Idle;
     id_.reset();
@@ -261,9 +274,27 @@ void Controller::finish() {
     buffered_.clear();
 }
 
-void Controller::startWatchdog() {
-    actions_.startTimer(kFinalizeTimeoutMs);
+void Controller::startWatchdog(uint64_t ms) {
+    actions_.startTimer(ms);
     timerRunning_ = true;
+}
+
+void Controller::stopWatchdog() {
+    if (!timerRunning_) return;
+    actions_.stopTimer();
+    timerRunning_ = false;
+}
+
+void Controller::cancelSession(uint32_t id) {
+    lastCancelledId_ = id;
+    actions_.callCancel(id);
+}
+
+// The daemon sends session signals only to the client that started the
+// session, so an unknown id is a session this addon lost track of.
+void Controller::cancelStray(uint32_t id) {
+    if (lastCancelledId_ == id) return;
+    cancelSession(id);
 }
 
 void Controller::showRecording() {

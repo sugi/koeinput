@@ -95,11 +95,11 @@ struct Fixture {
 void hold_commits_final() {
     Fixture f;
     CHECK(f.c.hotkeyPress(0, true, true));
-    CHECK_LOG(f.a.take(), "status Preparing", "start");
+    CHECK_LOG(f.a.take(), "status Preparing", "timer 6000", "start");
     f.c.startReply(7);
     f.c.stateChanged(7, "starting");
     f.c.stateChanged(7, "recording");
-    CHECK_LOG(f.a.take(), "status Recording");
+    CHECK_LOG(f.a.take(), "untimer", "status Recording");
     f.c.partial(7, "あ");
     CHECK_LOG(f.a.take(), "partial あ");
     CHECK(f.c.hotkeyRelease(1000));
@@ -262,16 +262,17 @@ void signals_before_reply_are_replayed() {
     f.c.partial(7, "a");
     CHECK_LOG(f.a.take());
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "status Recording", "partial a");
+    CHECK_LOG(f.a.take(), "untimer", "status Recording", "partial a");
 }
 
-void buffered_signals_for_other_ids_are_dropped() {
+void buffered_signals_for_other_ids_cancel_the_stray_session() {
     Fixture f;
     f.c.hotkeyPress(0, true, true);
     f.a.take();
     f.c.partial(3, "x");
+    f.c.partial(3, "y");
     f.c.startReply(7);
-    CHECK_LOG(f.a.take());
+    CHECK_LOG(f.a.take(), "untimer", "cancel 3");
 }
 
 void buffer_is_capped() {
@@ -280,7 +281,7 @@ void buffer_is_capped() {
     f.a.take();
     for (int i = 0; i < 100; ++i) f.c.partial(7, std::to_string(i));
     f.c.startReply(7);
-    CHECK(f.a.take().size() == Controller::kMaxBuffered);
+    CHECK(f.a.take().size() == Controller::kMaxBuffered + 1);
 }
 
 void release_before_reply_stops_after_reply() {
@@ -290,7 +291,7 @@ void release_before_reply_stops_after_reply() {
     CHECK(f.c.hotkeyRelease(1000));
     CHECK_LOG(f.a.take());
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+    CHECK_LOG(f.a.take(), "untimer", "status Finalizing", "timer 10000", "stop 7");
 }
 
 void esc_before_reply_cancels_after_reply() {
@@ -301,7 +302,7 @@ void esc_before_reply_cancels_after_reply() {
     CHECK_LOG(f.a.take(), "clear");
     f.c.stateChanged(7, "recording");
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "cancel 7");
+    CHECK_LOG(f.a.take(), "untimer", "cancel 7");
     CHECK(f.c.idle());
 }
 
@@ -321,7 +322,7 @@ void start_errors_map_to_notices() {
         f.c.hotkeyPress(0, true, true);
         f.a.take();
         f.c.startFailed(k.kind, "msg");
-        CHECK_LOG(f.a.take(), "clear", k.expected);
+        CHECK_LOG(f.a.take(), "untimer", "clear", k.expected);
         CHECK(f.c.idle());
         CHECK(f.c.hotkeyRelease(1000));
         CHECK_LOG(f.a.take());
@@ -334,7 +335,7 @@ void start_failure_after_user_cancel_is_quiet() {
     f.c.escape();
     f.a.take();
     f.c.startFailed(CallError::NoDaemon, "");
-    CHECK_LOG(f.a.take());
+    CHECK_LOG(f.a.take(), "untimer");
     CHECK(f.c.idle());
 }
 
@@ -458,7 +459,7 @@ void daemon_left_while_starting_then_start_failure() {
     f.c.hotkeyPress(0, true, true);
     f.a.take();
     f.c.daemonLeft();
-    CHECK_LOG(f.a.take(), "clear", "notify DaemonLeft");
+    CHECK_LOG(f.a.take(), "untimer", "clear", "notify DaemonLeft");
     f.c.startFailed(CallError::NoDaemon, "");
     CHECK_LOG(f.a.take());
 }
@@ -470,11 +471,11 @@ void new_session_after_finish() {
     f.c.finalText(7, "x");
     f.a.take();
     CHECK(f.c.hotkeyPress(5000, true, true));
-    CHECK_LOG(f.a.take(), "status Preparing", "start");
+    CHECK_LOG(f.a.take(), "status Preparing", "timer 6000", "start");
     f.c.startReply(8);
-    f.c.partial(7, "old");
+    f.c.stateChanged(7, "done");
     f.c.partial(8, "new");
-    CHECK_LOG(f.a.take(), "partial new");
+    CHECK_LOG(f.a.take(), "untimer", "partial new");
 }
 
 void press_while_finalizing_is_swallowed() {
@@ -497,6 +498,11 @@ void call_error_names() {
     CHECK(callErrorFromName("org.freedesktop.DBus.Error.TimedOut") == CallError::Timeout);
     CHECK(callErrorFromName("org.nemui.KoeInput.Error.NoSuchSession") == CallError::Other);
     CHECK(callErrorFromName("") == CallError::Other);
+    CHECK(callErrorFromName("org.freedesktop.DBus.Error.Spawn.ExecFailed") == CallError::NoDaemon);
+    CHECK(callErrorFromName("org.freedesktop.DBus.Error.Spawn.ServiceNotFound") == CallError::NoDaemon);
+    CHECK(callErrorFromName("org.freedesktop.DBus.Error.Spawn.ChildExited") == CallError::NoDaemon);
+    CHECK(callErrorFromName("org.freedesktop.DBus.Error.Spawn") == CallError::Other);
+    CHECK(callErrorFromName("org.freedesktop.DBus.Error.SpawnFailed") == CallError::Other);
 }
 
 void first_repeat_of_plain_key_is_a_repeat() {
@@ -537,7 +543,7 @@ void other_key_in_starting_cancels() {
     CHECK(!f.c.otherKeyPress());
     CHECK_LOG(f.a.take(), "clear");
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "cancel 7");
+    CHECK_LOG(f.a.take(), "untimer", "cancel 7");
     CHECK(f.c.idle());
 }
 
@@ -550,7 +556,7 @@ void other_key_in_starting_with_pending_stop_releases_display() {
     CHECK(!f.c.otherKeyPress());
     CHECK_LOG(f.a.take(), "clear");
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "timer 10000", "stop 7");
+    CHECK_LOG(f.a.take(), "untimer", "timer 10000", "stop 7");
     f.c.finalText(7, "x");
     CHECK_LOG(f.a.take(), "untimer", "commit x");
 }
@@ -562,7 +568,7 @@ void focus_lost_in_starting() {
     f.c.focusLost();
     CHECK_LOG(f.a.take(), "clear");
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "cancel 7");
+    CHECK_LOG(f.a.take(), "untimer", "cancel 7");
     CHECK(f.c.idle());
 }
 
@@ -575,7 +581,7 @@ void buffered_final_and_done_commit_once() {
     f.c.stateChanged(7, "done");
     CHECK_LOG(f.a.take());
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "status Recording", "clear", "commit x");
+    CHECK_LOG(f.a.take(), "untimer", "status Recording", "clear", "commit x");
     CHECK(f.c.idle());
 }
 
@@ -587,7 +593,7 @@ void buffered_finalizing_with_pending_stop() {
     f.c.stateChanged(7, "finalizing");
     CHECK_LOG(f.a.take());
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000");
+    CHECK_LOG(f.a.take(), "untimer", "status Finalizing", "timer 10000");
 }
 
 void second_press_in_starting_after_tap() {
@@ -598,7 +604,7 @@ void second_press_in_starting_after_tap() {
     CHECK(f.c.hotkeyPress(2000, true, true));
     CHECK_LOG(f.a.take());
     f.c.startReply(7);
-    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+    CHECK_LOG(f.a.take(), "untimer", "status Finalizing", "timer 10000", "stop 7");
 }
 
 void stale_timer_is_ignored() {
@@ -623,8 +629,118 @@ void full_buffer_keeps_final() {
     f.c.finalText(7, "x");
     f.c.startReply(7);
     const Log l = f.a.take();
-    CHECK(l.size() == 65);
+    CHECK(l.size() == 66);
     CHECK(l.size() < 2 || Log(l.end() - 2, l.end()) == Log({"clear", "commit x"}));
+}
+
+void start_watchdog_ends_starting() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    f.c.timerFired();
+    CHECK_LOG(f.a.take(), "clear", "notify NoResponse");
+    CHECK(f.c.idle());
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take(), "cancel 7");
+    CHECK(f.c.hotkeyRelease(1000));
+    CHECK_LOG(f.a.take());
+}
+
+void start_watchdog_after_user_cancel_is_quiet() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    CHECK(f.c.escape());
+    CHECK_LOG(f.a.take(), "clear");
+    f.c.timerFired();
+    CHECK_LOG(f.a.take());
+    CHECK(f.c.idle());
+}
+
+void reply_stops_start_watchdog() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    f.c.startReply(7);
+    const Log l = f.a.take();
+    CHECK(!l.empty() && l.front() == "untimer");
+    f.c.timerFired();
+    CHECK_LOG(f.a.take());
+    CHECK(!f.c.idle());
+}
+
+void stray_session_is_cancelled_once() {
+    Fixture f;
+    f.c.stateChanged(9, "recording");
+    CHECK_LOG(f.a.take(), "cancel 9");
+    f.c.partial(9, "x");
+    CHECK_LOG(f.a.take());
+    f.c.stateChanged(9, "cancelled");
+    CHECK_LOG(f.a.take());
+    CHECK(f.c.idle());
+}
+
+void stray_starting_and_partial_are_cancelled() {
+    {
+        Fixture f;
+        f.c.stateChanged(9, "starting");
+        CHECK_LOG(f.a.take(), "cancel 9");
+    }
+    {
+        Fixture f;
+        f.c.partial(9, "x");
+        CHECK_LOG(f.a.take(), "cancel 9");
+    }
+    {
+        Fixture f;
+        f.c.stateChanged(9, "finalizing");
+        f.c.stateChanged(9, "done");
+        f.c.finalText(9, "x");
+        f.c.error(9, "internal", "m");
+        CHECK_LOG(f.a.take());
+    }
+}
+
+void stray_session_during_own_session_is_cancelled() {
+    Fixture f;
+    f.recording();
+    f.c.partial(3, "x");
+    CHECK_LOG(f.a.take(), "cancel 3");
+    f.c.partial(7, "a");
+    CHECK_LOG(f.a.take(), "partial a");
+    CHECK(!f.c.idle());
+}
+
+void own_cancel_is_not_repeated() {
+    Fixture f;
+    f.recording();
+    CHECK(f.c.escape());
+    CHECK_LOG(f.a.take(), "cancel 7", "clear");
+    f.c.partial(7, "x");
+    CHECK_LOG(f.a.take());
+    f.c.stateChanged(7, "recording");
+    CHECK_LOG(f.a.take());
+}
+
+void late_reply_after_stray_signal_is_cancelled_once() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.c.timerFired();
+    f.a.take();
+    f.c.stateChanged(7, "starting");
+    CHECK_LOG(f.a.take(), "cancel 7");
+    f.c.startReply(7);
+    CHECK_LOG(f.a.take());
+}
+
+void finished_session_signals_do_not_cancel() {
+    Fixture f;
+    f.recording();
+    f.c.hotkeyRelease(1000);
+    f.c.finalText(7, "x");
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7", "untimer", "clear", "commit x");
+    f.c.stateChanged(7, "done");
+    CHECK_LOG(f.a.take());
 }
 
 } // namespace
@@ -652,7 +768,7 @@ int main() {
         T(focus_lost_cancels),
         T(focus_lost_while_finalizing_cancels),
         T(signals_before_reply_are_replayed),
-        T(buffered_signals_for_other_ids_are_dropped),
+        T(buffered_signals_for_other_ids_cancel_the_stray_session),
         T(buffer_is_capped),
         T(release_before_reply_stops_after_reply),
         T(esc_before_reply_cancels_after_reply),
@@ -686,6 +802,15 @@ int main() {
         T(stale_timer_is_ignored),
         T(unknown_error_code_is_internal),
         T(full_buffer_keeps_final),
+        T(start_watchdog_ends_starting),
+        T(start_watchdog_after_user_cancel_is_quiet),
+        T(reply_stops_start_watchdog),
+        T(stray_session_is_cancelled_once),
+        T(stray_starting_and_partial_are_cancelled),
+        T(stray_session_during_own_session_is_cancelled),
+        T(own_cancel_is_not_repeated),
+        T(late_reply_after_stray_signal_is_cancelled_once),
+        T(finished_session_signals_do_not_cancel),
 #undef T
     };
     for (auto &t : tests) {

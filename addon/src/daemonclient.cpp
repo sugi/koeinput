@@ -12,7 +12,8 @@ DaemonClient::DaemonClient(fcitx::dbus::Bus &bus, DaemonCallbacks callbacks)
     watch_ = watcher_.watchService(
         kBusName, [this](const std::string &, const std::string &oldOwner,
                          const std::string &newOwner) {
-            if (!oldOwner.empty() && newOwner.empty()) cb_.daemonLeft();
+            owner_ = newOwner;
+            if (!oldOwner.empty() && newOwner.empty() && cb_.daemonLeft) cb_.daemonLeft();
         });
     match_ = bus_.addMatch(fcitx::dbus::MatchRule(kBusName, kObjectPath, kInterface),
                            [this](Message &message) { return onSignal(message); });
@@ -33,16 +34,18 @@ void DaemonClient::start() {
             << fcitx::dbus::ContainerEnd();
     startCall_ = message.callAsync(kStartTimeoutUsec, [this](Message &reply) {
         if (reply.isError()) {
-            cb_.startFailed(callErrorFromName(reply.errorName()), reply.errorMessage());
+            if (cb_.startFailed) {
+                cb_.startFailed(callErrorFromName(reply.errorName()), reply.errorMessage());
+            }
             return true;
         }
         uint32_t id = 0;
         reply >> id;
         if (!reply) {
-            cb_.startFailed(CallError::Other, "unexpected reply to Start");
+            if (cb_.startFailed) cb_.startFailed(CallError::Other, "unexpected reply to Start");
             return true;
         }
-        cb_.started(id);
+        if (cb_.started) cb_.started(id);
         return true;
     });
 }
@@ -51,7 +54,7 @@ void DaemonClient::stop(uint32_t id) {
     auto message = methodCall("Stop");
     message << id;
     stopCall_ = message.callAsync(kCallTimeoutUsec, [this, id](Message &reply) {
-        if (reply.isError()) {
+        if (reply.isError() && cb_.stopFailed) {
             cb_.stopFailed(id, callErrorFromName(reply.errorName()), reply.errorMessage());
         }
         return true;
@@ -66,22 +69,24 @@ void DaemonClient::cancel(uint32_t id) {
 
 bool DaemonClient::onSignal(Message &message) {
     if (message.type() != fcitx::dbus::MessageType::Signal) return false;
+    // An empty owner means the watcher's first lookup has not answered yet.
+    if (!owner_.empty() && message.sender() != owner_) return false;
     const std::string member = message.member();
     uint32_t id = 0;
     std::string a;
     if (member == "StateChanged") {
         message >> id >> a;
-        if (message) cb_.stateChanged(id, a);
+        if (message && cb_.stateChanged) cb_.stateChanged(id, a);
     } else if (member == "Partial") {
         message >> id >> a;
-        if (message) cb_.partial(id, a);
+        if (message && cb_.partial) cb_.partial(id, a);
     } else if (member == "Final") {
         message >> id >> a;
-        if (message) cb_.finalText(id, a);
+        if (message && cb_.finalText) cb_.finalText(id, a);
     } else if (member == "Error") {
         std::string b;
         message >> id >> a >> b;
-        if (message) cb_.error(id, a, b);
+        if (message && cb_.error) cb_.error(id, a, b);
     }
     return true;
 }

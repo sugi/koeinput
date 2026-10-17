@@ -27,6 +27,8 @@ struct DaemonCallbacks {
 
 // Asynchronous client of the KoeInput daemon on an fcitx5 D-Bus connection.
 // Destroying it drops every pending reply and subscription.
+// A callback must not call the same method of this client again synchronously:
+// the new call replaces that method's slot, which is the one running.
 class DaemonClient {
 public:
     static constexpr uint64_t kStartTimeoutUsec = 5000000;
@@ -45,11 +47,10 @@ private:
 
     fcitx::dbus::Bus &bus_;
     DaemonCallbacks cb_;
+    std::string owner_;
     fcitx::dbus::ServiceWatcher watcher_;
     std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> watch_;
     std::unique_ptr<fcitx::dbus::Slot> match_;
-    // One slot per method. A slot is replaced only by the next call of the same
-    // method, never inside its own reply callback.
     std::unique_ptr<fcitx::dbus::Slot> startCall_;
     std::unique_ptr<fcitx::dbus::Slot> stopCall_;
     std::unique_ptr<fcitx::dbus::Slot> cancelCall_;
