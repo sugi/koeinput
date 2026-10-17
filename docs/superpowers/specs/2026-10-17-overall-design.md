@@ -8,6 +8,9 @@ Each milestone below gets its own detailed spec and implementation plan before c
 
 Labels follow decisions.md: **Decided**, **Recommended**, **To verify**, **Open**.
 
+**Decided**: the project is called **KoeInput** (声インプット), short form **KI**.
+Packages `koeinput` and `fcitx5-koeinput`, command `koeinput`, D-Bus name `org.nemui.KoeInput`.
+
 ## 1. First release
 
 **Decided** by the user:
@@ -64,12 +67,12 @@ Rules that keep the addon safe inside fcitx5 (from the vinput review in decision
 | whisper.cpp | Not in the first release | Recommended | On this CPU it takes about 2 to 6 s per utterance, and in one test it silently dropped whole sentences. It can be added later as a second backend. |
 | Default model | parakeet-tdt_ctc-0.6b-ja (int8) | Recommended | Fast (RTF about 0.03), few dropped sentences in tests. Weak points: punctuation and English words. Confirm with the spike summary. |
 | Optional final-stage model | Qwen3-ASR 0.6B | Recommended, later milestone | Better punctuation and hotword support, but too slow for partial results. |
-| Audio capture | PipeWire native API (`pipewire` crate) | To verify in M1 | Low-latency setting, stream opened on demand, a named node in the desktop's audio settings. Fallback: the PulseAudio API. |
+| Audio capture | PulseAudio API (`libpulse-simple-binding`), served by `pipewire-pulse` on PipeWire desktops | Recommended | Works on PipeWire and PulseAudio desktops alike. The dev container only has the PulseAudio socket, not the native PipeWire socket. Small fragment size (about 20 ms) is required. |
 | D-Bus | `zbus` | Recommended | Pure Rust, async, supports signals sent to one client. |
 | Addon build | CMake with the fcitx5 development packages | Decided | The standard way to build fcitx5 modules. |
 | Addon settings | fcitx5's own config system | Recommended | The hotkey and display options then appear in the normal fcitx5 settings window. |
-| Daemon settings | TOML file in `~/.config/<name>/` | Recommended | Model, microphone, thread count, dictionary path. |
-| Models | Downloaded by the CLI into `~/.local/share/<name>/models/`, checked against SHA-256 | Recommended | Models are large and have different licenses (parakeet-ja is CC-BY-4.0 and needs attribution). They do not go into packages. |
+| Daemon settings | TOML file in `~/.config/koeinput/` | Recommended | Model, microphone, thread count, dictionary path. |
+| Models | Downloaded by the CLI into `~/.local/share/koeinput/models/`, checked against SHA-256 | Recommended | Models are large and have different licenses (parakeet-ja is CC-BY-4.0 and needs attribution). They do not go into packages. |
 
 How the `sherpa-onnx` crate links (checked in `sherpa-onnx-sys` 1.13.8):
 
@@ -80,10 +83,8 @@ How the `sherpa-onnx` crate links (checked in `sherpa-onnx-sys` 1.13.8):
 
 ## 4. D-Bus interface (draft)
 
-The names depend on the project name, which is still open.
-`org.nemui.<Name>` is a placeholder, based on the user's domain.
 
-- Bus name `org.nemui.<Name>`, object `/org/nemui/<Name>`, interface `org.nemui.<Name>.Recognizer1`.
+- Bus name `org.nemui.KoeInput`, object `/org/nemui/KoeInput`, interface `org.nemui.KoeInput.Recognizer1`.
 - Methods: `Start(a{sv} options) → u session`, `Stop(u session)`, `Cancel(u session)`.
 - Signals, sent only to the client that started the session: `StateChanged(u session, s state)`, `Partial(u session, s text)`, `Final(u session, s text)`, `Error(u session, s code, s message)`.
 - States: `starting`, `recording` (sent when the first audio arrives), `finalizing`, `done`, `cancelled`, `error`.
@@ -147,15 +148,15 @@ Evaluation data and models stay under `work/`, which git ignores.
 
 One source package builds two binary packages:
 
-- `<name>`: daemon, CLI, systemd user unit, D-Bus service file, model catalog.
-- `fcitx5-<name>`: the addon. It depends on `<name>` and on fcitx5.
+- `koeinput`: daemon, CLI, systemd user unit, D-Bus service file, model catalog.
+- `fcitx5-koeinput`: the addon. It depends on `koeinput` and on fcitx5.
 
 Installed files:
 
-- `/usr/bin/<name>` and `/usr/libexec/<name>/<name>-daemon`
-- `/usr/lib/systemd/user/<name>.service` and `/usr/share/dbus-1/services/org.nemui.<Name>.service` (D-Bus activation through systemd)
-- `/usr/lib/<multiarch>/fcitx5/<name>.so` and `/usr/share/fcitx5/addon/<name>.conf`
-- `/usr/share/<name>/models.toml` (model catalog: URL, SHA-256, size, license)
+- `/usr/bin/koeinput` and `/usr/libexec/koeinput/koeinput-daemon`
+- `/usr/lib/systemd/user/koeinput.service` and `/usr/share/dbus-1/services/org.nemui.KoeInput.service` (D-Bus activation through systemd)
+- `/usr/lib/<multiarch>/fcitx5/koeinput.so` and `/usr/share/fcitx5/addon/koeinput.conf`
+- `/usr/share/koeinput/models.toml` (model catalog: URL, SHA-256, size, license)
 
 Installing to system paths also removes the open question about how fcitx5 finds addons in user directories.
 
@@ -167,7 +168,7 @@ Installing to system paths also removes the open question about how fcitx5 finds
 - The addon supports every fcitx5 5.x (see decisions.md). The core library soname has been `libfcitx5core7` from 5.0.5 to 5.1.23.
   Packages are still built per distribution release, as usual, and the package dependency comes from the libraries actually used.
   Targets: Debian 13 and Debian testing (the user's host) first, then Ubuntu LTS, then Fedora.
-- `postinst` does not download anything. After installation, the user runs `<name> model install`.
+- `postinst` does not download anything. After installation, the user runs `koeinput model install`.
   If no model is installed, the addon shows a notification with that command.
 - The RPM spec and PKGBUILD follow the same build steps.
 - **Open**: the repository host and CI service. Until then, builds run locally in containers.
@@ -179,7 +180,7 @@ Each milestone starts with its own spec and implementation plan.
 | Milestone | Deliverable | Done when |
 |---|---|---|
 | M0. Spike summary | Short results document; default model fixed | The current benchmark run is summarized. No further measurement. |
-| M1. Daemon and CLI | Rust workspace; capture, VAD, sherpa-onnx backend, partial scheduling, D-Bus service, WAV file input; `<name> listen` prints partial and final text in a terminal | Dictation works end to end from the CLI on the host session bus. Tests pass on WAV fixtures. |
+| M1. Daemon and CLI | Rust workspace; capture, VAD, sherpa-onnx backend, partial scheduling, D-Bus service, WAV file input; `koeinput listen` prints partial and final text in a terminal | Dictation works end to end from the CLI on the host session bus. Tests pass on WAV fixtures. |
 | M2. Minimal addon | fcitx5 module: hotkey, indicator, final commit; installed on the host with a local `.deb` built in the Debian 13 container | Dictation works in WezTerm, Chrome, Firefox, Emacs and Discord. |
 | M3. Debian packaging | Proper source package with two binary packages, offline build, model install command, lintian mostly clean | Clean install on a fresh Debian 13 container and on the host. Daily use starts here. |
 | M4. Quality | Partial display (inline preedit or panel), output clean-up, user dictionary, optional final-stage model, latency under CPU load | The user's daily pain points are fixed. |
@@ -198,7 +199,7 @@ No separate tests are needed before M2:
   Fixtures use public sample audio only. The user's own recordings never go into the repository.
 - addon: keep the logic small. **To verify**: use fcitx5's test frontend modules for automated tests.
   Otherwise, use a manual checklist for the five main apps.
-- packages: lintian, install and remove in a clean container, then a smoke test (`<name> transcribe` on a fixture).
+- packages: lintian, install and remove in a clean container, then a smoke test (`koeinput transcribe` on a fixture).
 - Models: the spike scripts under `tools/` can rerun the benchmark when a new model is tried.
 
 ## 10. Risks
@@ -206,13 +207,11 @@ No separate tests are needed before M2:
 | Risk | Effect | Plan |
 |---|---|---|
 | fcitx5 changes its binary interface within 5.x | The addon fails to load after an fcitx5 upgrade | CI builds against the oldest and newest 5.x. The package depends on the soname, so a new soname blocks the install. |
-| `pipewire` crate not mature enough | Capture code takes longer | Fall back to the PulseAudio API. |
 | sherpa-onnx prebuilt archive changes or disappears | Builds break | Pin by checksum and keep a local copy. Building from source against Debian's ONNX Runtime is the long-term option. |
 | Inline preedit renders badly in terminals or Emacs | Partial results are hard to read | Decide in M4. Option to show partial results in the fcitx5 panel instead. |
 | Latency rises when the CPU is busy | The final result arrives late | Measure in M4. Tune the thread count and process priority. |
 
 ## 11. Open items for the user
 
-- Project name. It sets the package names, binary names and D-Bus names, so it is needed before M1 code. Working name: `voice-flood`. Other ideas: tincan, cyrano.
 - License of this project. Needed before the first release.
 - Repository host and CI. Needed for M5.

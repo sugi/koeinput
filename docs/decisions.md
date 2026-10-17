@@ -1,4 +1,4 @@
-# Japanese voice input for fcitx5: decisions so far
+# KoeInput: decisions so far
 
 Last updated: 2026-10-17.
 
@@ -8,6 +8,16 @@ Each item has one of these labels:
 - **Recommended**: proposed, not final.
 - **To verify**: not yet confirmed. Do not treat it as fact.
 - **Open**: not discussed enough to decide.
+
+## Name
+
+**Decided**: KoeInput (声インプット), short form KI.
+
+- Packages: `koeinput` and `fcitx5-koeinput`.
+- Command: `koeinput`. Daemon: `koeinput-daemon`.
+- D-Bus name: `org.nemui.KoeInput`.
+- A two-letter package name such as `ki` was rejected because it collides easily (an existing crate, and the Kotlin interactive shell command).
+- The repository directory name `voice-flood` is temporary.
 
 ## Goal
 
@@ -51,7 +61,7 @@ Pass this rule on to every agent that works on this project.
 Ideas worth reusing:
 
 - Open the microphone when recording starts, not at daemon start.
-- Ask PipeWire for 16 kHz mono 16-bit audio and let it resample.
+- Ask the sound server for 16 kHz mono audio and let it resample.
 - Use a modifier-only trigger key.
   Tell tap from hold by duration, ignore key auto-repeat, and cancel on a chord or on focus out.
 - Ignore recordings shorter than about 0.5 s.
@@ -252,7 +262,6 @@ Notes:
 
 ## Open items
 
-- Project name. Working name: `voice-flood` (the directory name). Other ideas: tincan, cyrano. `voinput` is too close to vinput.
 - License of this project.
 - Final choice of the daemon language (after the spike).
 - The D-Bus interface.
