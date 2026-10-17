@@ -257,7 +257,7 @@ Notes:
 
 1. Done: write this document.
 2. Done: record the evaluation data (42 of 43 items; s07 had no speech).
-3. Spike: measure the candidates on CPU. Summarize the current run only.
+3. Done: spike summary in [spike-results.md](spike-results.md). Default model: parakeet-ja.
 4. From here on, follow the milestones in [the overall design](superpowers/specs/2026-10-17-overall-design.md).
 
 ## Open items
