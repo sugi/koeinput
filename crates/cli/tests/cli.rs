@@ -88,6 +88,13 @@ fn manpage_is_hidden_roff_that_documents_the_commands() {
         &text[..text.len().min(80)]
     );
     assert!(text.contains("model"));
+    let plain = text.replace('\\', "");
+    assert!(plain.contains("--from-file"));
+    assert!(plain.contains("--partials"));
+    assert!(!plain.contains("manpage"));
+    for sub in ["listen", "status", "transcribe", "model", "help"] {
+        assert!(!plain.contains(&format!("koeinput-{sub}(1)")), "{sub}");
+    }
     let help = koeinput(home.path()).arg("--help").output().unwrap();
     assert!(!String::from_utf8(help.stdout).unwrap().contains("manpage"));
 }

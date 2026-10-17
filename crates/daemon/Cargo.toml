@@ -11,7 +11,7 @@ name = "koeinput-daemon"
 path = "src/main.rs"
 
 [features]
-test-hooks = ["koeinput-core/test-hooks", "tokio/time"]
+test-hooks = ["koeinput-core/test-hooks"]
 
 [dependencies]
 anyhow = "1.0.104"

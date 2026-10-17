@@ -352,10 +352,11 @@ async fn start_gives_up_after_four_seconds() {
 async fn ready_answers_during_a_waiting_start() {
     let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "3000")]).await;
     let caller = zbus::Connection::session().await.unwrap();
-    let waiting = tokio::spawn(async move {
-        let p = Recognizer1Proxy::new(&caller).await.unwrap();
-        p.start(HashMap::new()).await
-    });
+    let caller_p = Recognizer1Proxy::new(&caller).await.unwrap();
+    let waiting = {
+        let p = caller_p.clone();
+        tokio::spawn(async move { p.start(HashMap::new()).await })
+    };
     tokio::time::sleep(Duration::from_millis(300)).await;
     let p = Recognizer1Proxy::new(&conn).await.unwrap();
     let ready = timeout(Duration::from_millis(500), p.ready())
@@ -364,5 +365,5 @@ async fn ready_answers_during_a_waiting_start() {
         .unwrap();
     assert!(!ready);
     let id = waiting.await.unwrap().unwrap();
-    p.cancel(id).await.unwrap();
+    caller_p.cancel(id).await.unwrap();
 }
