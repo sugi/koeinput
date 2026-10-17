@@ -69,10 +69,10 @@ Errors end the session, clear the display and show a desktop notification throug
 
 | Situation | Message (Japanese UI text, English here) |
 |---|---|
-| The daemon is not on the bus (`ServiceUnknown`, `NameHasNoOwner`) | The KoeInput daemon is not running. |
+| The daemon is not on the bus (`ServiceUnknown`, `NameHasNoOwner`), or D-Bus activation failed (`org.freedesktop.DBus.Error.Spawn.*`) | The KoeInput daemon is not running. |
 | `NoModel` | The daemon's message: still loading, or the install command. |
 | `Busy` | Another dictation is running. |
-| No reply in time (`Start` 5 s, `Stop` and `Cancel` 3 s) | The daemon does not respond. |
+| No reply in time (`Start` 5 s, `Stop` 3 s), or the session is still starting after 6 s (for example the call could not be sent) | The daemon does not respond. |
 | No `Final` 10 s after `Stop` | The daemon does not respond. The session is cancelled. |
 | `Error` signal (`audio`, `model`, `internal`) | Code-specific text plus the daemon's message. |
 | The daemon leaves the bus during a session | The daemon stopped. |
@@ -148,12 +148,14 @@ Rules that need care:
 - **`Final` decides the commit.** The `done` state that follows on a separate signal only clears what is left.
   `cancelled` and `error` states end the session without a commit.
 - After a cancel, signals for that session id are ignored.
+- **Stray sessions.** The daemon sends session signals only to the client that started the session, so a `starting` or `recording` state, or a partial, for an id that is not the current session belongs to a session this addon lost track of (for example a `Start` reply that came after the 5 s timeout). The controller cancels such a session once, so the microphone does not stay open until the daemon's 120 s limit.
 
 ### daemonclient
 
 A thin wrapper over the fcitx5 `dbus` module's bus (`IDBusModule::bus`):
 
-- `start(callback)`, `stop(id, callback)`, `cancel(id)` with `Message::callAsync` and the timeouts above. Error replies are mapped to the kinds the controller knows (`NoDaemon`, `NoModel`, `Busy`, `Timeout`, `Other`) by their D-Bus error name.
+- `start()`, `stop(id)`, `cancel(id)` with `Message::callAsync` and the timeouts above; results come back through one set of callbacks. Error replies are mapped to the kinds the controller knows (`NoDaemon`, `NoModel`, `Busy`, `Timeout`, `Other`) by their D-Bus error name. Cancel is fire-and-forget: its reply or error is ignored, because the user has already ended the session.
+- Signals are accepted only from the daemon's current unique name, as reported by the service watcher.
 - One match rule for the daemon's interface (`org.nemui.KoeInput`, `/org/nemui/KoeInput`, `org.nemui.KoeInput.Recognizer1`), dispatched by member name to typed callbacks.
   The daemon sends these signals only to the client that started the session (unicast).
   **To verify in the integration test**: that a match rule with the well-known service name matches signals sent from the daemon's unique name. If not, match on the unique name reported by the service watcher.
