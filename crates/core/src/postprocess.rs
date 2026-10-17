@@ -162,6 +162,181 @@ pub fn load_dictionary(path: &Path) -> std::io::Result<DictionaryLoad> {
     Ok(DictionaryLoad { pairs, warnings })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum AddOutcome {
+    Added,
+    Replaced,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DictionaryError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+fn check_form(label: &str, form: &str) -> Result<(), DictionaryError> {
+    if form.is_empty() {
+        return Err(DictionaryError::Invalid(format!("{label} is empty")));
+    }
+    if form.contains(['\t', '\n', '\r']) {
+        return Err(DictionaryError::Invalid(format!(
+            "{label} contains a tab or a line break"
+        )));
+    }
+    Ok(())
+}
+
+fn read_or_empty(path: &Path) -> std::io::Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The key of an entry line, `None` for comments, blank lines and malformed lines.
+fn entry_key(line: &str, first: bool) -> Option<&str> {
+    let line = if first {
+        line.strip_prefix('\u{feff}').unwrap_or(line)
+    } else {
+        line
+    };
+    let line = line.trim_end_matches(['\r', '\n']);
+    if line.trim().is_empty() || line.starts_with('#') {
+        return None;
+    }
+    line.split_once('\t')
+        .map(|(k, _)| k)
+        .filter(|k| !k.is_empty())
+}
+
+fn line_ending(line: &str) -> &str {
+    if line.ends_with("\r\n") {
+        "\r\n"
+    } else if line.ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    }
+}
+
+/// Sets `wrong` to `right`, replacing the first entry for `wrong` in place and appending otherwise.
+/// Comments, blank lines, order, the BOM and the line endings stay as they are.
+pub fn add_entry(path: &Path, wrong: &str, right: &str) -> Result<AddOutcome, DictionaryError> {
+    check_form("the wrong form", wrong)?;
+    check_form("the right form", right)?;
+    if wrong.starts_with('#') {
+        return Err(DictionaryError::Invalid(
+            "the wrong form starts with #, which marks a comment".into(),
+        ));
+    }
+    let text = read_or_empty(path)?;
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(text.len() + wrong.len() + right.len() + 2);
+    let mut replaced = false;
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        if entry_key(line, i == 0) == Some(wrong) {
+            if replaced {
+                continue;
+            }
+            replaced = true;
+            if i == 0 && line.starts_with('\u{feff}') {
+                out.push('\u{feff}');
+            }
+            out.push_str(&format!("{wrong}\t{right}"));
+            out.push_str(if line_ending(line).is_empty() {
+                eol
+            } else {
+                line_ending(line)
+            });
+        } else {
+            out.push_str(line);
+        }
+    }
+    if !replaced {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str(eol);
+        }
+        out.push_str(&format!("{wrong}\t{right}{eol}"));
+    }
+    crate::config::write_atomic(path, &out)?;
+    Ok(if replaced {
+        AddOutcome::Replaced
+    } else {
+        AddOutcome::Added
+    })
+}
+
+/// Removes every entry for `wrong`; returns whether there was one. The file is untouched on a miss.
+pub fn remove_entry(path: &Path, wrong: &str) -> Result<bool, DictionaryError> {
+    let text = read_or_empty(path)?;
+    let mut removed = false;
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        if entry_key(line, i == 0) == Some(wrong) {
+            removed = true;
+            if i == 0 && line.starts_with('\u{feff}') {
+                out.push('\u{feff}');
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    if removed {
+        crate::config::write_atomic(path, &out)?;
+    }
+    Ok(removed)
+}
+
+type Stamp = Option<(std::time::SystemTime, u64)>;
+
+fn stamp(path: &Path) -> Stamp {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
+/// Notices changes to the dictionary file by its modification time and length.
+pub struct DictionaryWatch {
+    path: std::path::PathBuf,
+    seen: Stamp,
+}
+
+impl DictionaryWatch {
+    /// Call before the first load, so a change during that load is not missed.
+    pub fn new(path: std::path::PathBuf) -> Self {
+        let seen = stamp(&path);
+        Self { path, seen }
+    }
+
+    /// A new post-processor when the file differs from the last one seen; a missing file gives an empty one.
+    /// A file that cannot be read keeps the old dictionary and is tried again next time.
+    pub fn reload(&mut self) -> Option<PostProcessor> {
+        let now = stamp(&self.path);
+        if now == self.seen {
+            return None;
+        }
+        match load_dictionary(&self.path) {
+            Ok(d) => {
+                for w in &d.warnings {
+                    tracing::warn!("{w}");
+                }
+                self.seen = now;
+                tracing::info!(entries = d.pairs.len(), "dictionary reloaded");
+                Some(PostProcessor::new(d.pairs))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "{}: {e}; keeping the previous dictionary",
+                    self.path.display()
+                );
+                None
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +433,100 @@ mod tests {
                 .pairs
                 .is_empty()
         );
+    }
+
+    fn dict_file(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("dictionary.tsv");
+        std::fs::write(&p, content).unwrap();
+        (dir, p)
+    }
+
+    #[test]
+    fn add_entry_appends_and_replaces_in_place() {
+        let (_d, p) = dict_file("# my words\nあ\tい\n\nう\tえ\n");
+        assert_eq!(add_entry(&p, "お", "か").unwrap(), AddOutcome::Added);
+        assert_eq!(add_entry(&p, "あ", "き").unwrap(), AddOutcome::Replaced);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "# my words\nあ\tき\n\nう\tえ\nお\tか\n"
+        );
+    }
+
+    #[test]
+    fn add_entry_creates_the_file_and_terminates_the_last_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("sub/dictionary.tsv");
+        add_entry(&p, "a", "b").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "a\tb\n");
+        std::fs::write(&p, "a\tb").unwrap();
+        add_entry(&p, "c", "d").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "a\tb\nc\td\n");
+    }
+
+    #[test]
+    fn add_entry_keeps_bom_and_crlf() {
+        let (_d, p) = dict_file("\u{feff}a\tb\r\n# c\r\n");
+        add_entry(&p, "a", "x").unwrap();
+        add_entry(&p, "n", "m").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "\u{feff}a\tx\r\n# c\r\nn\tm\r\n"
+        );
+    }
+
+    #[test]
+    fn add_entry_refuses_forms_that_cannot_round_trip() {
+        let (_d, p) = dict_file("");
+        for (w, r) in [
+            ("", "b"),
+            ("a", ""),
+            ("a\tb", "c"),
+            ("a", "b\nc"),
+            ("a\r", "b"),
+            ("#a", "b"),
+        ] {
+            assert!(add_entry(&p, w, r).is_err(), "{w:?} {r:?}");
+        }
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "");
+    }
+
+    #[test]
+    fn remove_entry_drops_every_match_and_reports_a_miss() {
+        let (_d, p) = dict_file("# c\na\tb\nx\ty\na\tz\n");
+        assert!(remove_entry(&p, "a").unwrap());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "# c\nx\ty\n");
+        assert!(!remove_entry(&p, "a").unwrap());
+        let missing = p.with_file_name("none.tsv");
+        assert!(!remove_entry(&missing, "a").unwrap());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn add_entry_keeps_a_symlinked_dictionary() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.tsv");
+        let link = dir.path().join("dictionary.tsv");
+        std::fs::write(&real, "a\tb\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        add_entry(&link, "c", "d").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "a\tb\nc\td\n");
+    }
+
+    #[test]
+    fn watch_reloads_only_when_the_file_changed() {
+        let (_d, p) = dict_file("a\tb\n");
+        let mut w = DictionaryWatch::new(p.clone());
+        assert!(w.reload().is_none());
+        std::fs::write(&p, "a\tbb\n").unwrap();
+        let pp = w.reload().expect("changed length");
+        assert_eq!(pp.apply("a"), "bb");
+        assert!(w.reload().is_none());
+        std::fs::remove_file(&p).unwrap();
+        assert_eq!(w.reload().expect("removed").apply("a"), "a");
+        assert!(w.reload().is_none());
+        std::fs::write(&p, "a\tc\n").unwrap();
+        assert_eq!(w.reload().expect("created").apply("a"), "c");
     }
 }

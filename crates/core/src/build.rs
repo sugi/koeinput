@@ -30,6 +30,13 @@ pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), Buil
     Ok((engine, id))
 }
 
+/// The configured dictionary file, or the default one.
+pub fn dictionary_path(paths: &Paths, cfg: &Config) -> std::path::PathBuf {
+    cfg.dictionary
+        .clone()
+        .unwrap_or_else(|| paths.dictionary_file.clone())
+}
+
 fn catalog(paths: &Paths) -> Result<Catalog, BuildError> {
     Catalog::load(&paths.catalog_file).map_err(|e| BuildError::Catalog(e.to_string()))
 }
@@ -56,11 +63,8 @@ pub fn load_main(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildE
             });
         }
     }
-    let dict_path = cfg
-        .dictionary
-        .clone()
-        .unwrap_or_else(|| paths.dictionary_file.clone());
-    let dict = load_dictionary(&dict_path).map_err(|e| BuildError::Load(e.to_string()))?;
+    let dict = load_dictionary(&dictionary_path(paths, cfg))
+        .map_err(|e| BuildError::Load(e.to_string()))?;
     for w in &dict.warnings {
         tracing::warn!("{w}");
     }

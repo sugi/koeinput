@@ -474,3 +474,38 @@ async fn ready_answers_during_a_waiting_start() {
     let id = waiting.await.unwrap().unwrap();
     caller_p.cancel(id).await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dictionary_reload_between_sessions() {
+    let (d, conn) = start_daemon(&[]).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    let dict = d.dir.join("config/koeinput/dictionary.tsv");
+    let words = |to: &str| -> String { (0..6).map(|n| format!("{n}\t{to}\n")).collect() };
+
+    let (_, text) = dictate(&p).await;
+    assert!(text.chars().all(|c| c.is_ascii_digit()), "{text}");
+
+    std::fs::create_dir_all(dict.parent().unwrap()).unwrap();
+    std::fs::write(&dict, words("one")).unwrap();
+    let (_, text) = dictate(&p).await;
+    assert_eq!(text, "one");
+
+    // A session keeps the dictionary it started with.
+    let mut finals = p.receive_final_text().await.unwrap();
+    let id = p.start(HashMap::new()).await.unwrap();
+    std::fs::write(&dict, words("twenty")).unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    p.stop(id).await.unwrap();
+    let f = timeout(Duration::from_secs(5), finals.next())
+        .await
+        .expect("no Final")
+        .unwrap();
+    assert_eq!(f.args().unwrap().text, "one");
+    let (_, text) = dictate(&p).await;
+    assert_eq!(text, "twenty");
+
+    std::fs::remove_file(&dict).unwrap();
+    let (_, text) = dictate(&p).await;
+    assert!(text.chars().all(|c| c.is_ascii_digit()), "{text}");
+}

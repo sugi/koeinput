@@ -157,3 +157,84 @@ fn manpage_is_hidden_roff_that_documents_the_commands() {
     let help = koeinput(home.path()).arg("--help").output().unwrap();
     assert!(!String::from_utf8(help.stdout).unwrap().contains("manpage"));
 }
+
+fn dict_path(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".config/koeinput/dictionary.tsv")
+}
+
+#[test]
+fn dict_add_twice_replaces_and_keeps_comments() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    std::fs::create_dir_all(dict_path(home.path()).parent().unwrap()).unwrap();
+    std::fs::write(dict_path(home.path()), "# words\nx\ty\n").unwrap();
+    assert!(run(&["add", "foo", "bar"]).status.success());
+    let out = run(&["add", "foo", "baz"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8(out.stdout).unwrap().contains("replaced"));
+    assert_eq!(
+        std::fs::read_to_string(dict_path(home.path())).unwrap(),
+        "# words\nx\ty\nfoo\tbaz\n"
+    );
+}
+
+#[test]
+fn dict_add_refuses_a_tab_and_an_empty_form() {
+    let home = tempfile::tempdir().unwrap();
+    for args in [["add", "a\tb", "c"], ["add", "", "c"]] {
+        let out = koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+    }
+    assert!(!dict_path(home.path()).exists());
+}
+
+#[test]
+fn dict_remove_reports_a_missing_entry() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(run(&["add", "a", "b"]).status.success());
+    let out = run(&["remove", "zzz"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("no entry for zzz")
+    );
+    assert!(run(&["remove", "a"]).status.success());
+    assert_eq!(std::fs::read_to_string(dict_path(home.path())).unwrap(), "");
+}
+
+#[test]
+fn dict_list_prints_entries_and_nothing_for_a_missing_file() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = run(&["list"]);
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    run(&["add", "a", "b"]);
+    run(&["add", "c", "d"]);
+    let out = run(&["list"]);
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "a\tb\nc\td\n");
+}

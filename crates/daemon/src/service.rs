@@ -42,6 +42,7 @@ pub struct Shared {
     pub source: Option<String>,
     pub test_source: bool,
     pub load_finished: tokio::sync::watch::Sender<bool>,
+    pub dictionary: koeinput_core::postprocess::DictionaryWatch,
 }
 
 /// How long a Start waits for a model that is still loading, e.g. right after D-Bus activation.
@@ -83,13 +84,21 @@ impl Recognizer1 {
             if s.current.is_some() {
                 return Err(KoeError::Busy("a session is already running".into()));
             }
-            let engine = match &s.readiness {
+            let mut engine = match &s.readiness {
                 Readiness::Ready(e) => e.clone(),
                 Readiness::Loading => {
                     return Err(KoeError::NoModel("the model is still loading".into()));
                 }
                 Readiness::Missing(hint) => return Err(KoeError::NoModel(hint.clone())),
             };
+            // One metadata call per session; the small TSV is read under the lock only after a change.
+            if let Some(post) = s.dictionary.reload() {
+                engine = Arc::new(Engine {
+                    post: Arc::new(post),
+                    ..Engine::clone(&engine)
+                });
+                s.readiness = Readiness::Ready(engine.clone());
+            }
             s.next_id += 1;
             let id = s.next_id;
             let source = if s.test_source {

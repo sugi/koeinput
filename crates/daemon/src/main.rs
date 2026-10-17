@@ -2,10 +2,11 @@ mod service;
 
 use anyhow::Context;
 use futures_util::StreamExt;
-use koeinput_core::build::{BuildError, load_final, load_main};
+use koeinput_core::build::{BuildError, dictionary_path, load_final, load_main};
 use koeinput_core::config::{Config, Paths, load};
 use koeinput_core::engine::Engine;
 use koeinput_core::models::DEFAULT_MODEL_ID;
+use koeinput_core::postprocess::DictionaryWatch;
 use koeinput_core::recognizer::Recognizer;
 use koeinput_dbus_api::{BUS_NAME, OBJECT_PATH};
 use service::{Readiness, Recognizer1, Shared};
@@ -25,6 +26,8 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("reading {}", paths.config_file.display()))?;
     let test_fake =
         cfg!(feature = "test-hooks") && std::env::var("KOEINPUT_TEST_FAKE").as_deref() == Ok("1");
+    // Stamped before the load, so a change while the model loads is picked up at the first Start.
+    let dictionary = DictionaryWatch::new(dictionary_path(&paths, &cfg));
     let shared = Arc::new(Mutex::new(Shared {
         readiness: Readiness::Loading,
         current: None,
@@ -38,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         source: cfg.source.clone(),
         test_source: test_fake,
         load_finished: tokio::sync::watch::channel(false).0,
+        dictionary,
     }));
     // zbus would otherwise let a second daemon take the name from a running one.
     let conn = zbus::connection::Builder::session()

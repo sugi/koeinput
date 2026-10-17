@@ -99,8 +99,6 @@ pub fn set_final_model(path: &Path, model_id: Option<&str>) -> Result<(), Config
 }
 
 fn set_value(path: &Path, key: &str, value: &str) -> Result<(), ConfigError> {
-    // Renaming over a symlink would replace it with a regular file.
-    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -110,17 +108,24 @@ fn set_value(path: &Path, key: &str, value: &str) -> Result<(), ConfigError> {
         .parse()
         .map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
     doc[key] = toml_edit::value(value);
+    Ok(write_atomic(path, &doc.to_string())?)
+}
+
+/// Writes through a temporary file and a rename. A symlinked `path` is resolved first,
+/// because renaming over a symlink would replace it with a regular file.
+pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = parent.unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
     let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
     tmp_name.push(format!(".tmp{}", std::process::id()));
     let tmp = dir.join(tmp_name);
-    let result = std::fs::write(&tmp, doc.to_string()).and_then(|()| std::fs::rename(&tmp, path));
+    let result = std::fs::write(&tmp, contents).and_then(|()| std::fs::rename(&tmp, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    Ok(result?)
+    result
 }
 
 #[derive(Debug, Clone, PartialEq)]
