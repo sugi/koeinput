@@ -86,6 +86,8 @@ int main() {
                   KI_CHECK(has("startFailed " + std::to_string(static_cast<int>(CallError::NoDaemon))));
                   KI_CHECK(!has("left"));
                   log.clear();
+                  // The watcher has answered "no owner": a forged signal is rejected.
+                  forgeState(1, "forged");
                   daemon.emplace();
                   client.start();
               })
@@ -95,6 +97,7 @@ int main() {
                   KI_CHECK(has("state recording"));
                   KI_CHECK(id.has_value());
                   KI_CHECK(!has("left"));
+                  KI_CHECK(!has("state forged"));
                   if (id) {
                       forgeState(*id, "forged");
                       client.stop(*id);

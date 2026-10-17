@@ -78,7 +78,7 @@ KOEINPUT_DEV_IMAGE=bookworm scripts/addon test
 
 - The first image is Debian 13 (fcitx5 5.1). The `bookworm` image is Debian 12 (fcitx5 5.0). The addon must build and pass in both.
 - `scripts/addon test` builds the daemon with the `test-hooks` feature and runs the tests against it. Everything runs under `dbus-run-session` inside the container. Never run the tests on your own session bus.
-- The Debian 12 run skips the `daemonclient` test, because the daemon is built only in the Debian 13 image.
+- The Debian 12 run skips the `daemonclient` test and the daemon scenarios of the addon test, because the daemon is built only in the Debian 13 image.
 - The addon test uses its own `dbus.conf`. The system one depends on the `keyboard` addon, which is built into the fcitx5 binary and cannot load in a test instance.
 - `translation` checks that `addon/po/ja.po` compiles. To regenerate the catalog, run `scripts/dev sh -c 'xgettext --keyword=_ --language=C++ --from-code=UTF-8 --add-comments --package-name=fcitx5-koeinput -o addon/po/fcitx5-koeinput.pot addon/src/*.cpp addon/src/*.h'`.
 
@@ -102,7 +102,26 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput. 
 
 ### Host check
 
-The host check runs after the Debian packages are built (see the install section below once it exists).
+The packages come from the packaging milestone. Until they exist, build them as described in the install section below.
+
+Install and start:
+
+```sh
+sudo apt install ./koeinput_0.1.0-1_amd64.deb ./fcitx5-koeinput_0.1.0-1_amd64.deb
+koeinput model install parakeet-ja
+```
+
+Restart fcitx5 so it loads the addon: System Settings, Keyboard, Virtual Keyboard, choose None, apply, then choose Fcitx 5 and apply again. The keyboard keeps typing while fcitx5 is down, so a broken addon never locks you out of a terminal.
+
+Rollback:
+
+```sh
+sudo apt remove fcitx5-koeinput koeinput
+```
+
+Then restart fcitx5 the same way.
+
+If Right Alt acts as AltGr on your keyboard layout, choose another hotkey in the settings.
 
 For each app (WezTerm, Chrome, Firefox, Emacs, Discord), check:
 
@@ -110,13 +129,13 @@ For each app (WezTerm, Chrome, Firefox, Emacs, Discord), check:
 2. Tap Right Alt, speak, and press it again.
 3. Partial text appears while you speak.
 4. Esc cancels the session.
-5. Another key while recording cancels the session.
+5. Another key while recording cancels the session. A modifier key alone (Shift, Control) does not.
 6. A password field does not start recording.
 7. While Mozc is composing, Right Alt does nothing.
 8. Click into another window during a session.
 9. Change the hotkey in the settings and try the new one.
-10. Stop the daemon during a session.
-11. With partial text showing, click into another window (try a GTK app such as Firefox and a Qt app): nothing is committed.
+10. Stop the daemon during a session: `systemctl --user stop koeinput`. A notification says the daemon stopped; `systemctl --user start koeinput` brings it back.
+11. With partial text showing, click into another window: nothing is committed. Try a GTK app such as Firefox, a Qt app, and Chrome and Discord (text-input-v3 clients may commit their own composition on blur).
 12. Switch the input method with its hotkey during a session: note what happens to the status and the session.
 
 For each app, note whether hold mode works and how the partial text looks. These notes feed M4.

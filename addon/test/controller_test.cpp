@@ -746,6 +746,84 @@ void daemon_left_resets_cancelled_id() {
     CHECK_LOG(f.a.take(), "cancel 7");
 }
 
+void flagged_repeat_after_long_gap_is_a_repeat() {
+    Fixture f;
+    f.recording(7, false);
+    CHECK(f.c.hotkeyPress(1500, true, false, true));
+    CHECK_LOG(f.a.take());
+    CHECK(f.c.hotkeyRelease(1600));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+}
+
+void unflagged_plain_press_after_lost_release_stops() {
+    Fixture f;
+    f.recording(7, false);
+    CHECK(f.c.hotkeyPress(1500, true, false));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+}
+
+void flagged_repeat_of_modifier_is_a_repeat() {
+    Fixture f;
+    f.recording();
+    CHECK(f.c.hotkeyPress(100, true, true, true));
+    CHECK_LOG(f.a.take());
+    CHECK(f.c.hotkeyRelease(1000));
+    CHECK_LOG(f.a.take(), "status Finalizing", "timer 10000", "stop 7");
+}
+
+void flagged_repeat_without_press_passes() {
+    Fixture f;
+    CHECK(!f.c.hotkeyPress(0, true, false, true));
+    CHECK_LOG(f.a.take());
+    CHECK(!f.c.hotkeyRelease(100));
+    CHECK(f.c.idle());
+}
+
+void buffered_sessions_cancelled_when_start_watchdog_fires() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    f.c.stateChanged(9, "starting");
+    f.c.partial(9, "x");
+    f.c.stateChanged(10, "recording");
+    f.c.stateChanged(11, "done");
+    f.c.finalText(12, "y");
+    f.c.timerFired();
+    CHECK_LOG(f.a.take(), "cancel 9", "cancel 10", "clear", "notify NoResponse");
+    CHECK(f.c.idle());
+}
+
+void buffered_session_not_cancelled_twice_by_late_reply() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    f.c.stateChanged(9, "recording");
+    f.c.timerFired();
+    CHECK_LOG(f.a.take(), "cancel 9", "clear", "notify NoResponse");
+    f.c.startReply(9);
+    CHECK_LOG(f.a.take());
+}
+
+void buffered_session_cancelled_on_start_failure() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.a.take();
+    f.c.partial(9, "x");
+    f.c.startFailed(CallError::Timeout, "");
+    CHECK_LOG(f.a.take(), "cancel 9", "untimer", "clear", "notify NoResponse");
+}
+
+void buffered_session_cancelled_when_daemon_leaves_while_starting() {
+    Fixture f;
+    f.c.hotkeyPress(0, true, true);
+    f.c.escape();
+    f.a.take();
+    f.c.stateChanged(9, "starting");
+    f.c.daemonLeft();
+    CHECK_LOG(f.a.take(), "cancel 9", "untimer");
+    CHECK(f.c.idle());
+}
+
 void finished_session_signals_do_not_cancel() {
     Fixture f;
     f.recording();
@@ -825,6 +903,14 @@ int main() {
         T(late_reply_after_stray_signal_is_cancelled_once),
         T(finished_session_signals_do_not_cancel),
         T(daemon_left_resets_cancelled_id),
+        T(flagged_repeat_after_long_gap_is_a_repeat),
+        T(unflagged_plain_press_after_lost_release_stops),
+        T(flagged_repeat_of_modifier_is_a_repeat),
+        T(flagged_repeat_without_press_passes),
+        T(buffered_sessions_cancelled_when_start_watchdog_fires),
+        T(buffered_session_not_cancelled_twice_by_late_reply),
+        T(buffered_session_cancelled_on_start_failure),
+        T(buffered_session_cancelled_when_daemon_leaves_while_starting),
 #undef T
     };
     for (auto &t : tests) {

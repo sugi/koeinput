@@ -49,8 +49,10 @@ private:
     Controller controller_;
     std::unique_ptr<DaemonClient> client_;
     fcitx::TrackableObjectReference<fcitx::InputContext> sessionIc_;
-    // Sym of the last hotkey press, so its release pairs even when the
-    // modifiers were released first (Control+space released as space).
+    // Keycode and sym of the last hotkey press, so its release pairs even when
+    // the modifiers changed in between (Control+space released as space,
+    // Alt_R released as Alt+Shift+Meta_R).
+    int hotkeyCode_ = 0;
     fcitx::KeySym hotkeySym_ = FcitxKey_None;
     uint64_t hotkeyPressMs_ = 0;
     bool escapeDown_ = false;
