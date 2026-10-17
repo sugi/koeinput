@@ -37,7 +37,7 @@ Longer recordings fall back to the current segment join. Partial results stay as
 
 **Decided**: a second, more accurate model can decode the final text, while the default model keeps producing partial results.
 
-- Config key `final_model` (a catalog id, empty by default). The daemon loads it next to the main model; `Ready` is true when both are loaded.
+- Config key `final_model` (a catalog id, empty by default). The daemon loads it after the main model; `Ready` is true as soon as the main model is loaded, and `FinalModelReady` tells whether the final-stage model is loaded too.
 - `koeinput model use ID --final` sets it (and installs nothing); `koeinput model use --final none` clears it.
 - Two read-only D-Bus properties are added (backward compatible): `FinalModel` (s, the configured id or empty) and `FinalModelReady` (b). `koeinput status` shows both models.
 - The final-stage model decodes the whole utterance (section 1). Over the section 1 limit, the main model's segment join is used, because decoding every segment again with the slower model would delay the final text by several seconds.
