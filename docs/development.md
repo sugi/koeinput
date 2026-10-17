@@ -61,7 +61,9 @@ Each test binary links sherpa-onnx statically, so it is large (about 50 MB) even
 To keep `target/` small:
 
 - Dependencies are built with line tables only (`[profile.dev.package."*"]` in `Cargo.toml`). Backtraces still show file and line; the workspace crates keep full debug info for gdb.
-- Cargo never deletes old build variants. They pile up when features, dependencies or profile settings change. Run `scripts/dev cargo clean` from time to time; the next build takes a few minutes longer.
+- Cargo never deletes old build variants. They pile up when features, dependencies or profile settings change.
+  `scripts/dev` therefore checks the size of `target/` before every `cargo` command. Above 8 GB it runs `cargo clean --profile dev` and `cargo clean --release` first, which keeps the downloaded sherpa-onnx archive and the addon builds. The next build takes about two minutes longer.
+  Change the limit with `KOEINPUT_TARGET_LIMIT_GB`. A full set of dev, test and release builds takes about 3.5 GB.
 - A git worktree under `.worktrees/` has its own `target/`. Removing the worktree removes it.
 
 ## Privacy

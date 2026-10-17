@@ -12,6 +12,16 @@ if ! podman image exists "$image"; then
   nice -n 10 podman build -t "$image" -f "$containerfile" "$root/packaging/containers" >&2
 fi
 mkdir -p "$root/work/cache/cargo-registry" "$root/work/cache/cargo-git"
+# Cargo never deletes old build variants; they pile up when features, dependencies
+# or profiles change. A full set of dev, test and release builds is about 3.5 GB.
+if [ "${1:-}" = cargo ] && [ -d "$root/target" ]; then
+  limit=${KOEINPUT_TARGET_LIMIT_GB:-8}
+  used=$(du -s --block-size=1G "$root/target" | cut -f1)
+  if [ "$used" -gt "$limit" ]; then
+    echo "scripts/dev: target/ uses $used GB (limit $limit GB); removing old Rust builds" >&2
+    "$0" sh -c 'cargo clean --profile dev && cargo clean --release' >&2
+  fi
+fi
 exec nice -n 10 podman run --rm -i --userns=keep-id \
   -v "$root:/src" -w /src \
   -v "$root/work/cache/cargo-registry:/usr/local/cargo/registry" \
