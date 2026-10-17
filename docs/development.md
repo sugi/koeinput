@@ -102,11 +102,11 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput. 
 
 ### Host check
 
-The host check needs the packages from M3, so it is done after M3. See the install section that M3 adds to this file.
+The host check runs after the Debian packages are built (see the install section below once it exists).
 
 For each app (WezTerm, Chrome, Firefox, Emacs, Discord), check:
 
-1. Hold Right Alt and speak after "録音中" appears. The text arrives when you release the key.
+1. Hold Right Alt and speak after "録音中" appears. The final text arrives shortly after you release the key.
 2. Tap Right Alt, speak, and press it again.
 3. Partial text appears while you speak.
 4. Esc cancels the session.
@@ -116,6 +116,8 @@ For each app (WezTerm, Chrome, Firefox, Emacs, Discord), check:
 8. Click into another window during a session.
 9. Change the hotkey in the settings and try the new one.
 10. Stop the daemon during a session.
+11. With partial text showing, click into another window (try a GTK app such as Firefox and a Qt app): nothing is committed.
+12. Switch the input method with its hotkey during a session: note what happens to the status and the session.
 
 For each app, note whether hold mode works and how the partial text looks. These notes feed M4.
 

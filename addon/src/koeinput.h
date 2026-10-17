@@ -52,6 +52,7 @@ private:
     // Sym of the last hotkey press, so its release pairs even when the
     // modifiers were released first (Control+space released as space).
     fcitx::KeySym hotkeySym_ = FcitxKey_None;
+    uint64_t hotkeyPressMs_ = 0;
     bool escapeDown_ = false;
     std::unique_ptr<fcitx::EventSourceTime> timer_;
     std::vector<std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>> watchers_;

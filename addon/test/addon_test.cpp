@@ -241,6 +241,49 @@ int main() {
                   [&] {
                       committed(6);
                       displayClear(ic());
+                  })
+            // Control released first: the auto-repeat arrives as a bare space.
+            .then(0, "plain hotkey repeat: press Control+space",
+                  [&] { KI_CHECK(send("Control+space", false)); })
+            .then(700, "plain hotkey repeat: bare space repeat is swallowed",
+                  [&] {
+                      KI_CHECK(send("space", false));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(700, "plain hotkey repeat: release", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "plain hotkey repeat: committed",
+                  [&] {
+                      committed(7);
+                      displayClear(ic());
+                  })
+            .then(0, "lost release: press Control+space", [&] { KI_CHECK(send("Control+space", false)); })
+            .then(300, "lost release: esc cancels, no hotkey release",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(1100, "lost release: an ordinary space passes",
+                  [&] {
+                      KI_CHECK(!send("space", false));
+                      KI_CHECK(!send("space", true));
+                      committed(7);
+                      displayClear(ic());
+                  })
+            .then(0, "tap with Control+space: press", [&] { KI_CHECK(send("Control+space", false)); })
+            .then(100, "tap with Control+space: release space", [&] { KI_CHECK(send("space", true)); })
+            .then(1300, "tap with Control+space: Control passes, the next press stops",
+                  [&] {
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                      KI_CHECK(!send("Control_L", false));
+                      KI_CHECK(!send("Control_L", true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                      KI_CHECK(send("Control+space", false));
+                      KI_CHECK(send("space", true));
+                  })
+            .then(1500, "tap with Control+space: committed",
+                  [&] {
+                      committed(8);
+                      displayClear(ic());
                       setHotkey("Alt_R");
                   })
             .then(0, "daemon killed: press",
@@ -251,7 +294,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(6);
+                      committed(8);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -261,7 +304,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(7);
+                committed(9);
                 displayClear(ic());
             });
     } else {

@@ -127,26 +127,38 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
 
 void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     const auto &key = event.key();
+    const uint64_t now = nowMs();
+    const bool sameSym = hotkeySym_ != FcitxKey_None && key.sym() == hotkeySym_;
     bool swallow = false;
     if (event.isRelease()) {
-        const bool pressedHotkey = hotkeySym_ != FcitxKey_None && key.sym() == hotkeySym_;
-        if (pressedHotkey || key.checkKeyList(*config_.hotkey)) {
+        if (sameSym || key.checkKeyList(*config_.hotkey)) {
             hotkeySym_ = FcitxKey_None;
-            swallow = controller_.hotkeyRelease(nowMs());
+            swallow = controller_.hotkeyRelease(now);
         } else if (key.sym() == FcitxKey_Escape && escapeDown_) {
             escapeDown_ = false;
             swallow = true;
         }
-    } else if (key.checkKeyList(*config_.hotkey)) {
+        if (swallow) event.filterAndAccept();
+        return;
+    }
+    // Once the modifiers of a combination hotkey are released, its auto-repeat
+    // arrives as the bare key. After a longer gap the key was released and
+    // the release lost: the press is an ordinary key again.
+    const bool repeat = sameSym && now - hotkeyPressMs_ <= Controller::kRepeatGapMs;
+    if (repeat || key.checkKeyList(*config_.hotkey)) {
         hotkeySym_ = key.sym();
+        hotkeyPressMs_ = now;
         auto *ic = event.inputContext();
         // The controller shows the first status before it calls callStart().
         if (controller_.idle()) sessionIc_ = ic->watch();
-        swallow = controller_.hotkeyPress(nowMs(), eligible(ic), key.isModifier());
+        swallow = controller_.hotkeyPress(now, eligible(ic), key.isModifier());
     } else if (key.sym() == FcitxKey_Escape) {
         swallow = controller_.escape();
         escapeDown_ = swallow;
-    } else {
+    } else if (!key.isModifier()) {
+        // A modifier alone is not "another key": it may be the start of a
+        // combination hotkey that stops a tap-mode session.
+        if (sameSym) hotkeySym_ = FcitxKey_None;
         swallow = controller_.otherKeyPress();
     }
     if (swallow) event.filterAndAccept();
