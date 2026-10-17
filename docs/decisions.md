@@ -259,6 +259,8 @@ Notes:
 2. Done: record the evaluation data (42 of 43 items; s07 had no speech).
 3. Done: spike summary in [spike-results.md](spike-results.md). Default model: parakeet-ja.
 4. From here on, follow the milestones in [the overall design](superpowers/specs/2026-10-17-overall-design.md).
+5. Done (2026-10-17): M1, the daemon and the CLI, merged into `main`. The microphone check with `koeinput listen` is still to be done by the user.
+6. Next: M2, the minimal fcitx5 addon. Current state and open questions: [status.md](status.md).
 
 ## Open items
 
