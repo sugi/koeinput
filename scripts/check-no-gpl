@@ -1,0 +1,34 @@
+#!/bin/sh
+# Fails when a binary contains code from espeak-ng or ucd-tools (GPL-3.0-or-later)
+# or piper-phonemize, which the default sherpa-onnx archive links in for text to speech.
+# Needs the symbol table, so run it on binaries before they are stripped.
+# Usage: scripts/check-no-gpl BINARY...
+# Exit status: 0 clean, 1 GPL symbols found, 2 a binary could not be checked.
+set -eu
+if [ $# -eq 0 ]; then
+  echo "usage: scripts/check-no-gpl BINARY..." >&2
+  exit 2
+fi
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+status=0
+for bin in "$@"; do
+  if ! nm -C --defined-only "$bin" >"$tmp/syms" 2>"$tmp/err"; then
+    cat "$tmp/err" >&2
+    exit 2
+  fi
+  # A stripped binary gives no symbols and exit status 0; passing it would prove nothing.
+  if [ ! -s "$tmp/syms" ]; then
+    echo "$bin: no symbol table (stripped?); cannot check" >&2
+    exit 2
+  fi
+  sed 's/^[0-9a-fA-F]* [A-Za-z] //' "$tmp/syms" | grep -E 'espeak_|ucd_|piper::' | sort -u >"$tmp/found"
+  if [ -s "$tmp/found" ]; then
+    echo "$bin: GPL symbols found ($(wc -l <"$tmp/found")):"
+    sed 's/^/  /' "$tmp/found"
+    status=1
+  else
+    echo "$bin: no GPL symbols"
+  fi
+done
+exit $status
