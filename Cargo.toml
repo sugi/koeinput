@@ -7,3 +7,9 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 publish = false
+
+# Full debug info for every dependency put about 90 MB of DWARF into each test
+# binary, and the target directory grew by gigabytes. Line tables keep file and
+# line numbers in backtraces; the workspace crates keep full debug info.
+[profile.dev.package."*"]
+debug = "line-tables-only"

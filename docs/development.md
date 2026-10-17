@@ -55,6 +55,15 @@ koeinput model install parakeet-ja --from-file <archive>
 
 Use `--from-file` to install from an archive you already downloaded.
 
+## Disk use
+
+Each test binary links sherpa-onnx statically, so it is large (about 50 MB) even without debug info.
+To keep `target/` small:
+
+- Dependencies are built with line tables only (`[profile.dev.package."*"]` in `Cargo.toml`). Backtraces still show file and line; the workspace crates keep full debug info for gdb.
+- Cargo never deletes old build variants. They pile up when features, dependencies or profile settings change. Run `scripts/dev cargo clean` from time to time; the next build takes a few minutes longer.
+- A git worktree under `.worktrees/` has its own `target/`. Removing the worktree removes it.
+
 ## Privacy
 
 Recognized text is never written to logs unless you set `KOEINPUT_LOG_TEXT=1`.
