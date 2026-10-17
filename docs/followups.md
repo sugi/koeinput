@@ -5,7 +5,6 @@ Each item names the milestone it belongs to.
 
 ## M3 (Debian packaging)
 
-- Decide the daemon's exit status when the session bus goes away (`crates/daemon/src/main.rs`). It exits with 0 today, so `Restart=on-failure` does not restart it.
 - Check the license terms of the prebuilt sherpa-onnx archive before shipping it inside packages.
 
 ## M4 (quality)
@@ -14,11 +13,6 @@ Each item names the milestone it belongs to.
   - Segment-wise decoding puts `。` at VAD segment boundaries in the middle of a sentence.
   - Silero's 20 s maximum speech length splits long monologues mid-word.
   - Fillers are also removed inside longer words; judge this with real transcripts.
-- Config (`crates/core/src/config.rs`):
-- CLI:
-  - `koeinput transcribe` stops the whole batch at the first bad file.
-  - `koeinput listen` early returns on errors skip the explicit cancel (the daemon still cancels when the client leaves).
-- Daemon: if the `name_has_owner` check fails, the session is kept (the error is only logged).
 
 ## M2 (fcitx5 addon)
 
@@ -42,3 +36,8 @@ Each item names the milestone it belongs to.
   - `Paths::from_vars` treats empty environment values as unset.
   - `load` validates `threads` and the timing values and names the key and range in the error.
 - `SherpaOffline::decode` returns an error when sherpa-onnx gives no result. Tests for 24-bit and float WAV files added. (M4)
+- Daemon exits with a non-zero status when the session bus connection closes, so `Restart=on-failure` restarts it. (M3)
+- Daemon `Start` cancels the new session when the `name_has_owner` check fails. (M4)
+- CLI (M4):
+  - `koeinput transcribe` continues after an unreadable or invalid file and exits non-zero if any file failed.
+  - `koeinput listen` cancels the session on every error return.

@@ -70,7 +70,8 @@ async fn main() -> anyhow::Result<()> {
             c.handle.cancel();
         }
     }
-    Ok(())
+    // Exiting non-zero lets Restart=on-failure bring the daemon back once the bus is up again.
+    anyhow::bail!("session bus connection closed")
 }
 
 async fn load_model(
