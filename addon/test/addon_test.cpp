@@ -463,6 +463,88 @@ int main() {
                       committed(11);
                       displayClear(ic());
                   })
+            .then(0, "altgr: press", [&] { KI_CHECK(send("Alt_R", false)); })
+            .then(700, "altgr: ISO_Level3_Shift and Mode_switch do not cancel",
+                  [&] {
+                      KI_CHECK(!send("ISO_Level3_Shift", false));
+                      KI_CHECK(!send("ISO_Level3_Shift", true));
+                      KI_CHECK(!send("Mode_switch", false));
+                      KI_CHECK(!send("Mode_switch", true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(700, "altgr: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
+            .then(1500, "altgr: committed",
+                  [&] {
+                      committed(12);
+                      displayClear(ic());
+                  })
+            // AltGr never auto-repeats, so a press while it counts as down is a new press.
+            .then(0, "altgr hotkey: press",
+                  [&] {
+                      setHotkey("ISO_Level3_Shift");
+                      KI_CHECK(send("ISO_Level3_Shift", false));
+                  })
+            .then(300, "altgr hotkey: esc cancels, the release is lost",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(300, "altgr hotkey: a press within the repeat gap starts a new session",
+                  [&] {
+                      KI_CHECK(send("ISO_Level3_Shift", false));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(1400, "altgr hotkey: release", [&] { KI_CHECK(send("ISO_Level3_Shift", true)); })
+            .then(1500, "altgr hotkey: committed",
+                  [&] {
+                      committed(13);
+                      displayClear(ic());
+                      setHotkey("Alt_R");
+                  })
+            // With Shift held, the Alt_R key produces Meta_R: another key on the same keycode.
+            .then(0, "lost modifier release: press Alt_R with a keycode",
+                  [&] { KI_CHECK(sendKey(instance, uuid, Key(FcitxKey_Alt_R, KeyStates(), 108), false)); })
+            .then(300, "lost modifier release: esc cancels, the release is lost",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(1100, "lost modifier release: Shift+Meta_R on the same keycode passes with its release",
+                  [&] {
+                      const Key shiftMeta(FcitxKey_Meta_R, KeyStates({KeyState::Shift}), 108);
+                      KI_CHECK(!send("Shift_L", false));
+                      KI_CHECK(!sendKey(instance, uuid, shiftMeta, false));
+                      KI_CHECK(!sendKey(instance, uuid, shiftMeta, true));
+                      KI_CHECK(!send("Shift_L", true));
+                      committed(13);
+                      displayClear(ic());
+                  })
+            .then(0, "chord: press Alt_R with two hotkeys configured",
+                  [&] {
+                      RawConfig raw;
+                      raw.setValueByPath("Hotkey/0", "Alt_R");
+                      raw.setValueByPath("Hotkey/1", "Control+space");
+                      instance.addonManager().addon("koeinput")->setConfig(raw);
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(700, "chord: Control+space while Alt_R is down is swallowed with its release",
+                  [&] {
+                      KI_CHECK(send("Control+space", false));
+                      KI_CHECK(send("space", true));
+                  })
+            .then(600, "chord: still recording, release Alt_R",
+                  [&] {
+                      KI_CHECK(ic()->inputPanel().auxUp().toString() == "Recording");
+                      KI_CHECK(send("Alt+Alt_R", true));
+                  })
+            .then(1500, "chord: committed",
+                  [&] {
+                      committed(14);
+                      displayClear(ic());
+                      KI_CHECK(!send("space", false));
+                      KI_CHECK(!send("space", true));
+                      setHotkey("Alt_R");
+                  })
             .then(0, "daemon killed: press",
                   [&] {
                       daemon.reset();
@@ -471,7 +553,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(11);
+                      committed(14);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -481,7 +563,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(12);
+                committed(15);
                 displayClear(ic());
             });
     } else {

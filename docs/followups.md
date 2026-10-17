@@ -22,19 +22,21 @@ Each item names the milestone it belongs to.
 ## M2 (fcitx5 addon)
 
 - `Final` is sent before the `done` state, but on separate signals. Base timing and commit logic on `Final` itself, not on the order in which a client happens to process the two.
-- Two configured hotkeys pressed together: the release of the second can pass through without its press, because the addon remembers one press at a time.
-- `ISO_Level3_Shift` (AltGr) is not `Key::isModifier()`, so pressing it during a session counts as another key and cancels.
 - Without the frontend's repeat flag, the 1000 ms repeat window is refreshed by each matched repeat; the addon test covers the flagged path and a single unflagged repeat, not a long chain of unflagged repeats.
-- Rolling a bare key into a combination hotkey (press `space`, then `Control` while `space` is still down) is not recognized as the hotkey.
-- Clients using text-input-v3 (Chrome, Discord) may commit their own composition on blur even though the client preedit is marked `DontCommit`. Input for the per-app display choice in M4.
-- An input method switch key during a session is handled by fcitx5 before the addon: the session keeps running while the engine change may wipe the status.
-- The `DaemonProcess` test helper: a ready-timeout abort leaves the daemon child running; the child uses stdio between fork and exec; the temporary directories are not removed.
-- After a lost release of a modifier hotkey, the stored keycode is not cleared by a later press of another key on the same physical key (for example Shift+Meta_R), so that key's release is swallowed.
-- Frontends that send keycode 0 cannot pair a release such as Alt+Shift+Meta_R with a stateless Alt_R press.
+- Kept with a reason:
+  - Rolling a bare key into a combination hotkey (press `space`, then `Control` while `space` is still down) is not recognized as the hotkey: rare, and it needs key-state tracking of every key.
+  - Frontends that send keycode 0 cannot pair a release such as Alt+Shift+Meta_R with a stateless Alt_R press: no such frontend on the host.
+  - An input method switch key during a session is handled by fcitx5 before the addon: the session keeps running, which is acceptable.
+  - `Stop` and `Cancel` are sent without `NO_AUTO_START`: fcitx5's D-Bus API has no portable way to set it, and the window is milliseconds.
+- After a lost release of a hotkey, a press of another configured hotkey is taken for a chord and does nothing until the first hotkey is pressed again. A lost release is rare (the release went to another client or a grab) and the first hotkey recovers it.
 
 ## Done
 
 ### 2026-10-18
+
+- Addon (M4): the "Partial text" setting (in the app, in the panel, off) and the list of apps that always use the panel, for text-input-v3 clients that commit their composition on blur. The old `ShowPartial=False` reads as off.
+- Addon hotkeys (M4): `ISO_Level3_Shift` and `Mode_switch` count as modifiers (no cancel, no repeat window); after a lost release of a modifier hotkey, another sym on the same keycode (Shift+Meta_R) clears the stored key so its release passes; a second configured hotkey pressed while the first is down is a chord that does nothing.
+- `DaemonProcess` test helper (M4): kills the child on a ready-timeout abort, uses only async-signal-safe calls between fork and exec, and removes its temporary directory when the daemon stops.
 
 - Session and engine tests: recognizer errors during finalize and on a partial tick, `max_length` reached during the tail, `SessionConfig::from_config`, VAD factory failure, and the 2 s no-audio timeout.
 - Validate the model catalog when it is loaded: each `id` and `archive_root` must be a single plain path component, `files` values must be relative paths without `..`, `format` must be `file` or `tar.bz2`, and `sha256` must be 64 hex characters. Before this, an empty `id` made `koeinput model remove` delete the whole models directory. (M3)

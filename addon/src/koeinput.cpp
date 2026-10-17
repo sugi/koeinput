@@ -56,6 +56,13 @@ std::string noticeText(Notice notice, const std::string &detail) {
 
 uint64_t nowMs() { return fcitx::now(CLOCK_MONOTONIC) / 1000; }
 
+// Key::isModifier() leaves out the level and group shifts (AltGr), which
+// behave like modifiers: held with other keys and never auto-repeated.
+bool isModifierKey(const fcitx::Key &key) {
+    return key.isModifier() || key.sym() == FcitxKey_ISO_Level3_Shift ||
+           key.sym() == FcitxKey_Mode_switch;
+}
+
 } // namespace
 
 KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
@@ -161,18 +168,23 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
 void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     const auto &key = event.key();
     const uint64_t now = nowMs();
-    const bool sameKey = (hotkeyCode_ != 0 && key.code() == hotkeyCode_) ||
-                         (hotkeySym_ != FcitxKey_None && key.sym() == hotkeySym_);
+    const bool sameKey = hotkey_.matches(key);
+    const auto chordKey = std::find_if(chord_.begin(), chord_.end(),
+                                       [&](const PressedKey &k) { return k.matches(key); });
     bool swallow = false;
     if (event.isRelease()) {
+        if (chordKey != chord_.end()) {
+            chord_.erase(chordKey);
+            event.filterAndAccept();
+            return;
+        }
         const auto &hotkeys = *config_.hotkey;
         const bool modifierRelease =
             std::any_of(hotkeys.begin(), hotkeys.end(), [&](const fcitx::Key &k) {
                 return k.isModifier() && key.isReleaseOfModifier(k);
             });
         if (sameKey || modifierRelease || key.checkKeyList(hotkeys)) {
-            hotkeyCode_ = 0;
-            hotkeySym_ = FcitxKey_None;
+            hotkey_ = {};
             swallow = controller_.hotkeyRelease(now);
         } else if (key.sym() == FcitxKey_Escape && escapeDown_) {
             escapeDown_ = false;
@@ -189,8 +201,15 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     const bool flagged = event.rawKey().states().test(fcitx::KeyState::Repeat);
     const bool repeat = sameKey && (flagged || now - hotkeyPressMs_ <= Controller::kRepeatGapMs);
     if (repeat || key.checkKeyList(*config_.hotkey)) {
-        hotkeyCode_ = key.code();
-        hotkeySym_ = key.sym();
+        // Another configured hotkey while the first is still down is a chord.
+        if (!sameKey && !hotkey_.empty()) {
+            if (chordKey == chord_.end()) chord_.push_back({key.code(), key.sym()});
+            event.filterAndAccept();
+            return;
+        }
+        // A chord entry whose release was lost would otherwise swallow this key's release.
+        if (chordKey != chord_.end()) chord_.erase(chordKey);
+        hotkey_ = {key.code(), key.sym()};
         hotkeyPressMs_ = now;
         auto *ic = event.inputContext();
         // The controller shows the first status before it calls callStart().
@@ -198,18 +217,19 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
             sessionIc_ = ic->watch();
             partialTarget_ = partialTarget(*ic);
         }
-        swallow = controller_.hotkeyPress(now, eligible(ic), key.isModifier(), flagged);
-    } else if (key.sym() == FcitxKey_Escape) {
-        swallow = controller_.escape();
-        escapeDown_ = swallow;
-    } else if (!key.isModifier()) {
-        // A modifier alone is not "another key": it may be the start of a
-        // combination hotkey that stops a tap-mode session.
-        if (sameKey) {
-            hotkeyCode_ = 0;
-            hotkeySym_ = FcitxKey_None;
+        swallow = controller_.hotkeyPress(now, eligible(ic), isModifierKey(key), flagged);
+    } else {
+        // Another sym on the hotkey's keycode (Shift+Meta_R on the Alt_R key)
+        // means the hotkey's release was lost: let this key's release pass.
+        if (sameKey) hotkey_ = {};
+        if (key.sym() == FcitxKey_Escape) {
+            swallow = controller_.escape();
+            escapeDown_ = swallow;
+        } else if (!isModifierKey(key)) {
+            // A modifier alone is not "another key": it may be the start of a
+            // combination hotkey that stops a tap-mode session.
+            swallow = controller_.otherKeyPress();
         }
-        swallow = controller_.otherKeyPress();
     }
     if (swallow) event.filterAndAccept();
 }

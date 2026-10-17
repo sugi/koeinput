@@ -54,12 +54,23 @@ private:
     fcitx::TrackableObjectReference<fcitx::InputContext> sessionIc_;
     // Chosen when the session starts, from the context's program and the settings.
     PartialTarget partialTarget_ = PartialTarget::None;
-    // Keycode and sym of the last hotkey press, so its release pairs even when
-    // the modifiers changed in between (Control+space released as space,
+    // A pressed key, remembered by keycode and sym so its release pairs even
+    // when the modifiers changed in between (Control+space released as space,
     // Alt_R released as Alt+Shift+Meta_R).
-    int hotkeyCode_ = 0;
-    fcitx::KeySym hotkeySym_ = FcitxKey_None;
+    struct PressedKey {
+        int code = 0;
+        fcitx::KeySym sym = FcitxKey_None;
+
+        bool empty() const { return code == 0 && sym == FcitxKey_None; }
+        bool matches(const fcitx::Key &key) const {
+            return (code != 0 && key.code() == code) || (sym != FcitxKey_None && key.sym() == sym);
+        }
+    };
+
+    PressedKey hotkey_;
     uint64_t hotkeyPressMs_ = 0;
+    // Other configured hotkeys pressed while hotkey_ is down; they do nothing.
+    std::vector<PressedKey> chord_;
     bool escapeDown_ = false;
     std::unique_ptr<fcitx::EventSourceTime> timer_;
     std::vector<std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>> watchers_;
