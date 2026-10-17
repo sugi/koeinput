@@ -52,8 +52,17 @@ impl SileroVad {
 
     // sherpa-onnx mis-segments when handed a large buffer in one call, so feed window-sized pieces.
     fn feed(&mut self, samples: &[f32]) {
+        let lookback = ((MIN_SPEECH_S + 0.3) * SAMPLE_RATE as f32) as usize;
         for c in samples.chunks(512) {
             self.vad.accept_waveform(c);
+            self.fed += c.len();
+            if self.vad.detected() {
+                if self.open_start.is_none() {
+                    self.open_start = Some(self.fed.saturating_sub(lookback).max(self.last_end));
+                }
+            } else {
+                self.open_start = None;
+            }
         }
     }
 
@@ -75,15 +84,6 @@ impl SileroVad {
 impl Vad for SileroVad {
     fn accept(&mut self, samples: &[f32]) {
         self.feed(samples);
-        self.fed += samples.len();
-        if self.vad.detected() {
-            if self.open_start.is_none() {
-                let lookback = ((MIN_SPEECH_S + 0.3) * SAMPLE_RATE as f32) as usize;
-                self.open_start = Some(self.fed.saturating_sub(lookback).max(self.last_end));
-            }
-        } else {
-            self.open_start = None;
-        }
     }
 
     fn pop_finished(&mut self) -> Vec<Segment> {
@@ -103,7 +103,9 @@ impl Vad for SileroVad {
     fn finish(&mut self) -> Vec<Segment> {
         let real = self.fed;
         let pad = vec![0.0f32; ((MIN_SILENCE_S + 0.25) * SAMPLE_RATE as f32) as usize];
-        self.feed(&pad);
+        for c in pad.chunks(512) {
+            self.vad.accept_waveform(c);
+        }
         let out = self.drain(real);
         self.open_start = None;
         out
@@ -163,6 +165,26 @@ mod tests {
         assert!(!segs.is_empty());
         assert!(segs.iter().all(|s| s.start < s.end && s.end <= audio.len()));
         assert!(segs[0].start >= 12000, "{segs:?}");
+    }
+
+    // The buffer ends inside a second speech run (after a pause), so the reference is the open start
+    // a chunked run reports at the same point; chunk granularity allows about two windows of drift.
+    #[test]
+    fn silero_speech_start_is_independent_of_buffer_size_when_enabled() {
+        let Some((speech, model)) = sample_wav() else { return };
+        let mut audio = vec![0.0; 16000];
+        audio.extend_from_slice(&speech[..speech.len() / 2]);
+
+        let mut chunked = SileroVad::new(&model).unwrap();
+        for c in audio.chunks(320) {
+            chunked.accept(c);
+        }
+        let reference = chunked.speech_start().expect("chunked run has an open segment");
+
+        let mut one = SileroVad::new(&model).unwrap();
+        one.accept(&audio);
+        let s = one.speech_start().expect("single buffer has an open segment");
+        assert!(s.abs_diff(reference) <= 1024, "single {s} vs chunked {reference}");
     }
 
     #[test]
