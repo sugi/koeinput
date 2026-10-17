@@ -760,6 +760,23 @@ mod tests {
     }
 
     #[test]
+    fn whole_utterance_runs_to_the_end_of_the_recording() {
+        let closed = Segment {
+            start: 5 * S / 2,
+            end: 7 * S / 2,
+        };
+        let run = speak_and_stop(30 * S, vec![A, closed], never);
+        assert!(
+            run.early_spans
+                .contains(&(closed.start - PAD, closed.end + PAD)),
+            "closed before stop: {:?}",
+            run.early_spans
+        );
+        assert_eq!(run.final_spans, vec![(A.start - PAD, END)]);
+        assert_eq!(finals(&run.after_stop), vec![text(A.start - PAD, END)]);
+    }
+
+    #[test]
     fn long_utterance_falls_back_to_segment_join() {
         let span = END - A.start;
         let run = speak_and_stop(span, vec![A, B], never);
