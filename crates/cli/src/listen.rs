@@ -7,7 +7,7 @@ use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const NOT_RUNNING: &str =
-    "daemon not running (start it with: systemctl --user start koeinput, or run koeinput-daemon)";
+    "daemon not running (start it with: systemctl --user start koeinput; in a development checkout, run target/release/koeinput-daemon)";
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
     Ok(tokio::runtime::Builder::new_multi_thread()

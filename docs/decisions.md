@@ -267,7 +267,22 @@ Notes:
 3. Done: spike summary in [spike-results.md](spike-results.md). Default model: parakeet-ja.
 4. From here on, follow the milestones in [the overall design](superpowers/specs/2026-10-17-overall-design.md).
 5. Done (2026-10-17): M1, the daemon and the CLI, merged into `main`. The microphone check with `koeinput listen` is still to be done by the user.
-6. In progress (2026-10-18): M2, the minimal fcitx5 addon. Current state: [status.md](status.md).
+6. Done (2026-10-18): M2, the minimal fcitx5 addon, merged into `main`.
+7. Done (2026-10-18): M3, the Debian packages. The host install and the host check are pending for the user. Current state: [status.md](status.md).
+
+## Debian packages
+
+Decided for M3 on 2026-10-18 (details in [the M3 spec](superpowers/specs/2026-10-18-m3-debian-packaging-design.md)):
+
+- **Decided**: Every build, for development and for packages, uses the upstream sherpa-onnx static archive without text to speech (`no-tts`, v1.13.8), pinned by size and SHA-256 in `packaging/sherpa-onnx.env`.
+  The default archive links espeak-ng and ucd-tools (GPL-3.0-or-later) into both binaries, although KoeInput never uses text to speech. Binaries built from it could only be shipped under GPL terms.
+  `scripts/check-no-gpl` fails the build if their symbols appear.
+- **Decided**: The packages are amd64 only. The upstream archive exists only for x86_64 Linux; arm64 would need sherpa-onnx built from source, which is not planned.
+- **Decided**: Accept the binary size for the first release. Both binaries embed ONNX Runtime (66 MiB installed, a 19 MB `.deb`), because `koeinput transcribe` runs the recognizer in its own process. Running `transcribe` through the daemon would halve the size; revisit if size matters.
+- **Decided**: Packages build with the distribution's Rust (rustc 1.89 or newer). Debian 13 has 1.85, so the Debian 13 build takes `rustc` and `cargo` from trixie-backports. The development image keeps its own Rust.
+- **Decided**: debhelper compat 13, which Debian 13 and testing both support. No dh-cargo, because our crates are not in Debian; the crates come from a vendor tarball, and the build runs offline.
+- **Decided**: The copyright lines of each crate in `debian/copyright` come from the crate's license files. Cargo `authors` are used only when those files name no holder. `scripts/gen-copyright` generates the file.
+- **Decided**: The daemon is not enabled at login. D-Bus starts it on demand through the systemd user unit, and the addon asks for it when fcitx5 loads the addon, so the model is loaded by the first dictation.
 
 ## License and hosting
 

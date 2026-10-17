@@ -1,6 +1,6 @@
 #!/bin/sh
 # Makes the orig tarballs of the Debian source package in target/deb/:
-#   koeinput_V.orig.tar.xz              git archive of HEAD
+#   koeinput_V.orig.tar.xz              git archive of HEAD without debian/
 #   koeinput_V.orig-vendor.tar.xz       the crates of Cargo.lock, with the crates that
 #                                       x86_64 Linux does not build replaced by stubs
 #   koeinput_V.orig-sherpaonnx.tar.bz2  the pinned sherpa-onnx archive, byte for byte
@@ -52,7 +52,9 @@ and run again; otherwise raise the upstream version in debian/changelog."
   echo "$out/$name: written"
 }
 
-git archive --format=tar --prefix="koeinput-$upstream/" HEAD >"$tmp/main.tar"
+# debian/ goes into the .debian.tar.xz only; lintian warns (no-debian-changes) when
+# the orig tarball has the same files.
+git archive --format=tar --prefix="koeinput-$upstream/" HEAD -- . ':(exclude)debian' >"$tmp/main.tar"
 keep "$base.orig.tar.xz" "$tmp/main.tar" "xz -dc"
 
 scripts/sherpa-onnx >/dev/null

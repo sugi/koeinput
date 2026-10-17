@@ -155,7 +155,7 @@ Installed files:
 
 - `/usr/bin/koeinput` and `/usr/libexec/koeinput/koeinput-daemon`
 - `/usr/lib/systemd/user/koeinput.service` and `/usr/share/dbus-1/services/org.nemui.KoeInput.service` (D-Bus activation through systemd)
-- `/usr/lib/<multiarch>/fcitx5/koeinput.so` and `/usr/share/fcitx5/addon/koeinput.conf`
+- `/usr/lib/<multiarch>/fcitx5/libkoeinput.so` and `/usr/share/fcitx5/addon/koeinput.conf`
 - `/usr/share/koeinput/models.toml` (model catalog: URL, SHA-256, size, license)
 
 Installing to system paths also removes the open question about how fcitx5 finds addons in user directories.
@@ -164,7 +164,7 @@ Installing to system paths also removes the open question about how fcitx5 finds
 
 - Package builds run offline:
   - Rust crates come from `cargo vendor`.
-  - The sherpa-onnx archive is pinned by checksum and passed with `SHERPA_ONNX_ARCHIVE_DIR`.
+  - The sherpa-onnx archive (the no-TTS variant, see decisions.md) is pinned by checksum, and its extracted `lib/` directory is passed with `SHERPA_ONNX_LIB_DIR`.
 - The addon supports every fcitx5 5.x (see decisions.md). The core library soname has been `libfcitx5core7` from 5.0.5 to 5.1.23.
   Packages are still built per distribution release, as usual, and the package dependency comes from the libraries actually used.
   Targets: Debian 13 and Debian testing (the user's host) first, then Ubuntu LTS, then Fedora.

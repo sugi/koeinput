@@ -1,11 +1,7 @@
-# Follow-ups from M1 reviews
+# Follow-ups from reviews
 
-Small findings from the M1 code reviews that were deliberately left for later.
+Small findings from the code reviews that were deliberately left for later.
 Each item names the milestone it belongs to.
-
-## M3 (Debian packaging)
-
-- Check the license terms of the prebuilt sherpa-onnx archive before shipping it inside packages.
 
 ## M4 (quality)
 
@@ -15,6 +11,12 @@ Each item names the milestone it belongs to.
   - Fillers are also removed inside longer words; judge this with real transcripts.
 
 - Model download: a download that stalls mid-body hangs `koeinput model install`. There is no idle timeout, and ureq 3 has no per-read timeout.
+- Addon and daemon: a `Stop` or `Cancel` that the addon sends in the few milliseconds between the daemon losing its bus name and the addon seeing `NameOwnerChanged` can make the bus start a new daemon (D-Bus activation). Such calls should carry the `NO_AUTO_START` flag, but fcitx5's D-Bus API has no portable way to set it.
+
+## M5 (formats and release)
+
+- The main orig tarball is `git archive` of HEAD, so it changes with every commit. That is fine until the first release. After it, every new build, even a change in `debian/` alone, needs a new upstream version, unless the tarball is made from the release tag.
+- Some vendored crates contain tests or examples taken from other projects, which are only in the source package and not in the binaries: crossbeam-channel's tests from Go (BSD-3-Clause) and its example under CC-BY-3.0, and ring's test data from BoringSSL and other test suites. `debian/copyright` has paragraphs for the crossbeam-channel files and lists ring's holders, but the vendor tree was not checked file by file. An upload to Debian would need that check, or would leave such files out with `Files-Excluded`.
 
 ## M2 (fcitx5 addon)
 
@@ -41,6 +43,7 @@ Each item names the milestone it belongs to.
   - `koeinput status` says "not loaded yet or failed" for a final model that is not ready; `model list` warns on an invalid config instead of failing; `final_full_max_ms = 0` skips the final model with a warning.
   - The dictionary reload skips files over 1 MiB; the man page documents `dict` and the file format.
 
+- The license terms of the prebuilt sherpa-onnx archive: the default archive links GPL code (espeak-ng, ucd-tools), so every build now uses the no-TTS archive, checked by `scripts/check-no-gpl`. The licenses of what remains are in `debian/copyright`. (M3)
 - Session and engine tests: recognizer errors during finalize and on a partial tick, `max_length` reached during the tail, `SessionConfig::from_config`, VAD factory failure, and the 2 s no-audio timeout.
 - Validate the model catalog when it is loaded: each `id` and `archive_root` must be a single plain path component, `files` values must be relative paths without `..`, `format` must be `file` or `tar.bz2`, and `sha256` must be 64 hex characters. Before this, an empty `id` made `koeinput model remove` delete the whole models directory. (M3)
 - Model download (`crates/core/src/models.rs`) (M4):
