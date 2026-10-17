@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.nemui.KoeInput
+Exec=/usr/libexec/koeinput/koeinput-daemon
+SystemdService=koeinput.service

@@ -36,7 +36,8 @@ pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), Buil
     for w in &dict.warnings {
         tracing::warn!("{w}");
     }
-    let rec = SherpaOffline::new(entry, &paths.models_dir, cfg.threads).map_err(|e| BuildError::Load(e.to_string()))?;
+    let rec = SherpaOffline::new(entry, &paths.models_dir, effective_threads(cfg.threads))
+        .map_err(|e| BuildError::Load(e.to_string()))?;
     let vad_model = vad_entry.file(&paths.models_dir, "model").map_err(|e| BuildError::Load(e.to_string()))?;
     let vad: VadFactory = Arc::new(move || SileroVad::new(&vad_model).map(|v| Box::new(v) as Box<dyn Vad>).map_err(|e| e.to_string()));
     let engine = Engine {
@@ -46,4 +47,25 @@ pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), Buil
         post: Arc::new(PostProcessor::new(dict.pairs)),
     };
     Ok((engine, entry.id.clone()))
+}
+
+fn effective_threads(threads: i32) -> i32 {
+    if threads < 1 {
+        tracing::warn!("threads = {threads} is invalid; using 1");
+        return 1;
+    }
+    threads
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_threads;
+
+    #[test]
+    fn threads_below_one_become_one() {
+        assert_eq!(effective_threads(0), 1);
+        assert_eq!(effective_threads(-3), 1);
+        assert_eq!(effective_threads(1), 1);
+        assert_eq!(effective_threads(8), 8);
+    }
 }

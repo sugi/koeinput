@@ -6,3 +6,4 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }

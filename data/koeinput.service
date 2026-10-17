@@ -1,0 +1,8 @@
+[Unit]
+Description=KoeInput speech recognition daemon
+
+[Service]
+Type=dbus
+BusName=org.nemui.KoeInput
+ExecStart=/usr/libexec/koeinput/koeinput-daemon
+Restart=on-failure
