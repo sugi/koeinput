@@ -1,0 +1,16 @@
+# Strings in the prebuilt ONNX Runtime library (sherpaonnx/lib/libonnxruntime.a).
+spelling-error-in-binary Faild Failed [usr/bin/koeinput]
+spelling-error-in-binary Faild Failed [usr/libexec/koeinput/koeinput-daemon]
+spelling-error-in-binary nam name [usr/bin/koeinput]
+spelling-error-in-binary nam name [usr/libexec/koeinput/koeinput-daemon]
+spelling-error-in-binary outputing outputting [usr/bin/koeinput]
+spelling-error-in-binary outputing outputting [usr/libexec/koeinput/koeinput-daemon]
+spelling-error-in-binary redunant redundant [usr/bin/koeinput]
+spelling-error-in-binary redunant redundant [usr/libexec/koeinput/koeinput-daemon]
+spelling-error-in-binary upto up to [usr/bin/koeinput]
+spelling-error-in-binary upto up to [usr/libexec/koeinput/koeinput-daemon]
+# A string in the prebuilt simple-sentencepiece library (sherpaonnx/lib/libssentencepiece_core.a).
+spelling-error-in-binary seperate separate [usr/bin/koeinput]
+spelling-error-in-binary seperate separate [usr/libexec/koeinput/koeinput-daemon]
+# A panic message in the vendored ureq crate (vendor/ureq-3.4.2/src/timings.rs).
+spelling-error-in-binary preceeding preceding [usr/bin/koeinput]

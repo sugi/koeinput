@@ -52,5 +52,8 @@ add_executable(daemonclient_test test/daemonclient_test.cpp src/daemonclient.cpp
 target_link_libraries(daemonclient_test PRIVATE Fcitx5::Utils)
 add_test(NAME daemonclient COMMAND daemonclient_test)
 set_tests_properties(daemonclient PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+# Needs a bus that can start the test daemon by D-Bus activation (scripts/addon test).
+add_test(NAME daemonclient_activation COMMAND daemonclient_test activation)
+set_tests_properties(daemonclient_activation PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
 add_test(NAME translation COMMAND ${GETTEXT_MSGFMT_EXECUTABLE} --check -o /dev/null ${CMAKE_SOURCE_DIR}/po/ja.po)

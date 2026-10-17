@@ -75,6 +75,9 @@ KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
             controller_.error(id, c, m);
         };
         cb.daemonLeft = [this] { controller_.daemonLeft(); };
+        cb.activateFailed = [](const std::string &m) {
+            KOEINPUT_WARN() << "Cannot start the KoeInput daemon: " << m;
+        };
         client_ = std::make_unique<DaemonClient>(*bus, std::move(cb));
     }
     watchers_.emplace_back(instance_->watchEvent(
@@ -96,6 +99,8 @@ KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
                 controller_.focusLost();
             }
         }));
+    // So the model is loaded by the first dictation.
+    if (client_) client_->activate();
 }
 
 KoeInputAddon::~KoeInputAddon() = default;

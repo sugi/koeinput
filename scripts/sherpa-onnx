@@ -1,0 +1,108 @@
+#!/bin/sh
+# Prepares the pinned sherpa-onnx static libraries (packaging/sherpa-onnx.env) in
+# work/cache/sherpa-onnx/ and prints the lib/ directory for SHERPA_ONNX_LIB_DIR.
+# The archive is downloaded once and checked against the pinned size and SHA-256,
+# because the sherpa-onnx-sys build script checks nothing.
+# Usage: scripts/sherpa-onnx [--from-file ARCHIVE]   (--from-file for offline machines)
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+. "$root/packaging/sherpa-onnx.env"
+
+usage() {
+  echo "usage: scripts/sherpa-onnx [--from-file ARCHIVE]" >&2
+  exit 2
+}
+from=
+case $# in
+  0) ;;
+  2)
+    [ "$1" = --from-file ] || usage
+    from=$2
+    if [ ! -f "$from" ]; then
+      echo "scripts/sherpa-onnx: $from: no such file" >&2
+      exit 1
+    fi
+    case $from in /*) ;; *) from=$PWD/$from ;; esac ;;
+  *) usage ;;
+esac
+
+# Paths are relative to $root from here on, so a command line works unchanged in the
+# build container, which mounts $root at /src.
+cd "$root"
+cache=work/cache/sherpa-onnx
+archive=$cache/$SHERPA_ONNX_FILE
+lib=$cache/$SHERPA_ONNX_STEM/lib
+
+# .ready holds the SHA-256 of the archive the directory was extracted from.
+if [ -z "$from" ] && [ -f "$archive" ] && [ "$(cat "$lib/.ready" 2>/dev/null)" = "$SHERPA_ONNX_SHA256" ]; then
+  echo "$root/$lib"
+  exit 0
+fi
+
+# Runs a command on the host, or in the build container when the host lacks one of
+# the tools listed in $1.
+host_or_container() {
+  tools=$1
+  shift
+  for tool in $tools; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      KOEINPUT_DEV_NO_SHERPA=1 "$root/scripts/dev" "$@" >&2
+      return
+    fi
+  done
+  "$@" >&2
+}
+
+mkdir -p "$cache"
+tmp=$(mktemp -d "$cache/.tmp.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+download=$tmp/$SHERPA_ONNX_FILE
+
+if [ -n "$from" ]; then
+  origin=$from
+  cp "$from" "$download"
+elif [ -f "$archive" ]; then
+  origin="$root/$archive (delete it to download again)"
+  cp "$archive" "$download"
+else
+  origin=$SHERPA_ONNX_URL
+  echo "scripts/sherpa-onnx: downloading $SHERPA_ONNX_URL" >&2
+  host_or_container curl curl -fsSL --retry 3 -o "$download" "$SHERPA_ONNX_URL"
+fi
+
+refuse() {
+  rm -f "$download"
+  echo "scripts/sherpa-onnx: refusing $origin: expected $1, got $2 (pin in packaging/sherpa-onnx.env)" >&2
+  exit 1
+}
+size=$(wc -c <"$download")
+[ "$size" = "$SHERPA_ONNX_SIZE" ] || refuse "$SHERPA_ONNX_SIZE bytes" "$size bytes"
+sum=$(sha256sum "$download" | cut -d' ' -f1)
+[ "$sum" = "$SHERPA_ONNX_SHA256" ] || refuse "SHA-256 $SHERPA_ONNX_SHA256" "SHA-256 $sum"
+
+mkdir "$tmp/x"
+host_or_container "tar bzip2" tar -xjf "$download" -C "$tmp/x"
+new=$tmp/x/$SHERPA_ONNX_STEM/lib
+if [ ! -d "$new" ]; then
+  echo "scripts/sherpa-onnx: $SHERPA_ONNX_STEM/lib is not in the archive; check SHERPA_ONNX_STEM" >&2
+  exit 1
+fi
+# sherpa-onnx-sys always links these text-to-speech libraries, which the no-TTS
+# archive leaves out. The ar magic alone is an empty archive, the same bytes that
+# `ar rcs` writes without members.
+for name in espeak-ng piper_phonemize ucd; do
+  if [ -e "$new/lib$name.a" ]; then
+    echo "scripts/sherpa-onnx: the archive has lib$name.a; pin the no-TTS archive" >&2
+    exit 1
+  fi
+  printf '!<arch>\n' >"$new/lib$name.a"
+done
+echo "$SHERPA_ONNX_SHA256" >"$new/.ready"
+
+mv "$download" "$archive"
+if [ -e "$cache/$SHERPA_ONNX_STEM" ]; then
+  mv "$cache/$SHERPA_ONNX_STEM" "$tmp/old"
+fi
+mv "$tmp/x/$SHERPA_ONNX_STEM" "$cache/$SHERPA_ONNX_STEM"
+echo "$root/$lib"

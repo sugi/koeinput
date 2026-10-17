@@ -1,3 +1,4 @@
 /work/
 /target/
 /.worktrees/
+__pycache__/

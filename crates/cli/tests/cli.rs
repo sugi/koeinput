@@ -71,3 +71,30 @@ fn install_from_file_rejects_wrong_checksum() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("checksum"));
 }
+
+#[test]
+fn manpage_is_hidden_roff_that_documents_the_commands() {
+    let home = tempfile::tempdir().unwrap();
+    let out = koeinput(home.path()).arg("manpage").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains("\n.TH koeinput 1"),
+        "{}",
+        &text[..text.len().min(80)]
+    );
+    assert!(text.contains("model"));
+    let plain = text.replace('\\', "");
+    assert!(plain.contains("--from-file"));
+    assert!(plain.contains("--partials"));
+    assert!(!plain.contains("manpage"));
+    for sub in ["listen", "status", "transcribe", "model", "help"] {
+        assert!(!plain.contains(&format!("koeinput-{sub}(1)")), "{sub}");
+    }
+    let help = koeinput(home.path()).arg("--help").output().unwrap();
+    assert!(!String::from_utf8(help.stdout).unwrap().contains("manpage"));
+}

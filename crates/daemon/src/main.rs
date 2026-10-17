@@ -15,6 +15,7 @@ use zbus::object_server::InterfaceRef;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
@@ -34,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string()),
         source: cfg.source.clone(),
         test_source: test_fake,
+        load_finished: tokio::sync::watch::channel(false).0,
     }));
     // zbus would otherwise let a second daemon take the name from a running one.
     let conn = zbus::connection::Builder::session()
@@ -110,6 +112,7 @@ async fn load_model(
                 s.readiness = Readiness::Missing(format!("model loading failed: {e}"));
             }
         }
+        s.load_finished.send_replace(true);
     }
     // Proxies cache properties, so clients only see the new values through PropertiesChanged.
     // Model goes first so that a client reacting to Ready already has the right Model.

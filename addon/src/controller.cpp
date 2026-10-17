@@ -201,7 +201,7 @@ void Controller::daemonLeft() {
     lastCancelledId_.reset();
     if (phase_ == Phase::Idle) return;
     const bool quiet = pendingCancel_;
-    if (phase_ == Phase::Starting) cancelBuffered();
+    // Buffered sessions died with the daemon; a Cancel to its name could start a new one.
     finish();
     if (!quiet) actions_.notify(Notice::DaemonLeft, "");
 }

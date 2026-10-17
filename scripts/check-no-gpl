@@ -1,0 +1,53 @@
+#!/bin/sh
+# Fails when a binary contains code from espeak-ng or ucd-tools (GPL-3.0-or-later)
+# or piper-phonemize, which the default sherpa-onnx archive links in for text to speech.
+# Needs the symbol table, so run it on binaries before they are stripped.
+# Usage: scripts/check-no-gpl BINARY...
+# Exit status: 0 clean, 1 GPL symbols found, 2 a binary could not be checked
+# (including any tool failure or an interruption).
+set -u
+if [ $# -eq 0 ]; then
+  echo "usage: scripts/check-no-gpl BINARY..." >&2
+  exit 2
+fi
+bin=
+
+cannot() {
+  echo "${bin:-scripts/check-no-gpl}: $*; cannot check" >&2
+  exit 2
+}
+
+tmp=$(mktemp -d) || cannot "mktemp failed"
+trap 'rm -rf "$tmp"' EXIT
+trap 'cannot "interrupted"' HUP INT TERM
+
+# Returns grep's status for a match (0) or none (1); a grep error stops the check.
+search() {
+  rc=0
+  grep -E "$1" "$2" >"$3" || rc=$?
+  [ "$rc" -le 1 ] || cannot "grep failed with status $rc"
+  return "$rc"
+}
+
+status=0
+for bin in "$@"; do
+  if ! nm -C --defined-only "$bin" >"$tmp/syms" 2>"$tmp/err"; then
+    cat "$tmp/err" >&2
+    cannot "nm failed"
+  fi
+  # A stripped binary gives no symbols and exit status 0; passing it would prove nothing.
+  [ -s "$tmp/syms" ] || cannot "no symbol table (stripped?)"
+  sed 's/^[0-9a-fA-F]* [A-Za-z] //' "$tmp/syms" >"$tmp/names" || cannot "sed failed"
+  # Without sherpa-onnx symbols the binary is not the one meant, or the symbol
+  # names no longer look as this check expects; either way a pass would mean nothing.
+  search 'sherpa_onnx|SherpaOnnx' "$tmp/names" /dev/null || cannot "no sherpa-onnx symbols"
+  if search 'espeak_|ucd_|piper::' "$tmp/names" "$tmp/hits"; then
+    sort -u "$tmp/hits" >"$tmp/found" || cannot "sort failed"
+    echo "$bin: GPL symbols found ($(wc -l <"$tmp/found")):"
+    sed 's/^/  /' "$tmp/found"
+    status=1
+  else
+    echo "$bin: no GPL symbols"
+  fi
+done
+exit $status
