@@ -8,6 +8,34 @@ scripts/dev cargo build --release --workspace
 
 `scripts/dev` runs cargo in a rootless podman container (Debian 13, Rust 1.95). The host has no `-dev` packages, and the container gives every developer the same toolchain and libraries.
 
+## sherpa-onnx libraries
+
+KoeInput links sherpa-onnx statically from an upstream prebuilt archive.
+The default archive also contains the text-to-speech libraries espeak-ng and ucd-tools (GPL-3.0-or-later), which would put GPL code into our binaries.
+KoeInput does not use text to speech, so every build uses the upstream no-TTS archive instead.
+
+- `packaging/sherpa-onnx.env` pins the archive: file name, URL, size, SHA-256 and the top directory inside it.
+- `scripts/sherpa-onnx` downloads the archive once into `work/cache/sherpa-onnx/`, checks its size and SHA-256, extracts it and prints the `lib/` path. It refuses a file that does not match the pin.
+  Without network, give it a copy you downloaded elsewhere: `scripts/sherpa-onnx --from-file <archive>`.
+- `scripts/dev` runs `scripts/sherpa-onnx` before every container run and sets `SHERPA_ONNX_LIB_DIR` to that `lib/` directory. The `sherpa-onnx-sys` build script then uses it and downloads nothing.
+- That build script always links `espeak-ng`, `piper_phonemize` and `ucd`. The no-TTS archive has none of them, so `scripts/sherpa-onnx` adds three empty archives with these names.
+- `scripts/check-no-gpl` fails when a binary contains espeak-ng, ucd-tools or piper-phonemize symbols. It reads the symbol table, so run it on binaries that are not stripped:
+
+  ```sh
+  scripts/dev scripts/check-no-gpl target/release/koeinput target/release/koeinput-daemon
+  ```
+
+Older builds downloaded the default archive into `target/sherpa-onnx-prebuilt/`. Nothing uses it now, so you can delete it.
+
+To update the pin (the archive version must match the `sherpa-onnx` crate version):
+
+1. Change `sherpa-onnx = "=X.Y.Z"` in `crates/core/Cargo.toml`.
+2. Put the new no-TTS archive's file name, URL, size, SHA-256 and top directory (`tar -tjf <archive> | head -1`) into `packaging/sherpa-onnx.env`. Upstream ships no checksum file; compare your `sha256sum` with the `digest` of the asset in `https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/vX.Y.Z`.
+3. Check the list of libraries that the new `sherpa-onnx-sys` `build.rs` links. Each one must be in the archive or get an empty stub in `scripts/sherpa-onnx`.
+4. Build, run `scripts/check-no-gpl` on both binaries, and run the model tests.
+
+Cargo rebuilds `sherpa-onnx-sys` when `SHERPA_ONNX_LIB_DIR` changes, not when files inside the directory change. The directory name contains the version, so a new pin triggers the rebuild.
+
 ## Test
 
 ```sh
@@ -62,7 +90,7 @@ To keep `target/` small:
 
 - Dependencies are built with line tables only (`[profile.dev.package."*"]` in `Cargo.toml`). Backtraces still show file and line; the workspace crates keep full debug info for gdb.
 - Cargo never deletes old build variants. They pile up when features, dependencies or profile settings change.
-  `scripts/dev` therefore checks the size of `target/` before every `cargo` command. Above 8 GB it runs `cargo clean --profile dev` and `cargo clean --release` first, which keeps the downloaded sherpa-onnx archive and the addon builds. The next build takes about two minutes longer.
+  `scripts/dev` therefore checks the size of `target/` before every `cargo` command. Above 8 GB it runs `cargo clean --profile dev` and `cargo clean --release` first, which keeps the addon builds. The sherpa-onnx archive is in `work/cache/`, outside `target/`. The next build takes about two minutes longer.
   Change the limit with `KOEINPUT_TARGET_LIMIT_GB`. A full set of dev, test and release builds takes about 3.5 GB.
 - A git worktree under `.worktrees/` has its own `target/`. Removing the worktree removes it.
 

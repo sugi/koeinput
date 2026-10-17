@@ -12,6 +12,14 @@ if ! podman image exists "$image"; then
   nice -n 10 podman build -t "$image" -f "$containerfile" "$root/packaging/containers" >&2
 fi
 mkdir -p "$root/work/cache/cargo-registry" "$root/work/cache/cargo-git"
+# Builds link the no-TTS sherpa-onnx libraries, which keep GPL code out of the binaries.
+# The bookworm image has no Rust. scripts/sherpa-onnx sets KOEINPUT_DEV_NO_SHERPA when
+# it runs its own tools here.
+sherpa=
+if [ "$name" != bookworm ] && [ -z "${KOEINPUT_DEV_NO_SHERPA:-}" ]; then
+  lib=$("$root/scripts/sherpa-onnx")
+  sherpa="SHERPA_ONNX_LIB_DIR=/src/${lib#"$root"/}"
+fi
 # Cargo never deletes old build variants; they pile up when features, dependencies
 # or profiles change. A full set of dev, test and release builds is about 3.5 GB.
 if [ "${1:-}" = cargo ] && [ -d "$root/target" ]; then
@@ -28,5 +36,5 @@ exec nice -n 10 podman run --rm -i --userns=keep-id \
   -v "$root/work/cache/cargo-git:/usr/local/cargo/git" \
   -e CARGO_TARGET_DIR=/src/target \
   -e KOEINPUT_MODEL_TESTS -e KOEINPUT_TEST_MODELS_DIR -e KOEINPUT_AUDIO_TESTS \
-  -e KOEINPUT_TEST_DAEMON \
+  -e KOEINPUT_TEST_DAEMON ${sherpa:+-e "$sherpa"} \
   "$image" "$@"
