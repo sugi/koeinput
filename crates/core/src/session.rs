@@ -68,6 +68,7 @@ pub struct Session {
     last_partial: String,
     next_tick: usize,
     stop_at: Option<usize>,
+    len_at_stop: Option<usize>,
     state: State,
 }
 
@@ -83,6 +84,7 @@ impl Session {
             last_partial: String::new(),
             next_tick: cfg.partial_interval,
             stop_at: None,
+            len_at_stop: None,
             state: State::Starting,
         }
     }
@@ -99,6 +101,7 @@ impl Session {
         !self.is_finished() && self.stop_at.is_none_or(|t| self.audio.len() < t)
     }
 
+    /// Pass all audio received since the previous call in one push; at most one partial decode happens per call.
     pub fn push(&mut self, samples: &[f32]) -> Vec<Event> {
         let mut ev = Vec::new();
         if self.is_finished() || samples.is_empty() {
@@ -147,7 +150,8 @@ impl Session {
         }
         self.state = State::Finalizing;
         let mut ev = vec![Event::State(State::Finalizing)];
-        if self.audio.is_empty() {
+        self.len_at_stop = Some(self.audio.len());
+        if self.audio.is_empty() || self.cfg.tail == 0 {
             ev.extend(self.finalize());
         } else {
             self.stop_at = Some(self.audio.len() + self.cfg.tail);
@@ -176,8 +180,12 @@ impl Session {
         vec![Event::State(State::Cancelled)]
     }
 
-    pub fn abort(&mut self) {
+    pub fn abort(&mut self) -> bool {
+        if self.is_finished() {
+            return false;
+        }
         self.state = State::Error;
+        true
     }
 
     fn decode(&self, seg: Segment) -> Result<String, RecognizerError> {
@@ -210,7 +218,8 @@ impl Session {
                 Err(e) => return self.fail(ev, e),
             }
         }
-        let text = if self.audio.len() < self.cfg.min_length {
+        let speech_len = self.len_at_stop.unwrap_or(self.audio.len());
+        let text = if speech_len < self.cfg.min_length {
             String::new()
         } else {
             self.post.apply(&join_segments(&self.fixed))
@@ -233,7 +242,6 @@ impl Session {
 mod tests {
     use super::*;
     use crate::testing::{FakeRecognizer, FakeVad};
-    use crate::vad::Segment;
 
     const S: usize = 16000;
 
@@ -277,10 +285,11 @@ mod tests {
             ev.extend(s.push(chunk));
         }
         let before = r.calls();
-        assert!(before <= 3, "{before} decodes in 1 s of audio");
+        assert_eq!(before, 2, "decodes in 1 s of audio");
         s.push(&audio(&[(2 * S, 0.1)]));
         assert_eq!(r.calls(), before + 1);
-        assert!(ev.contains(&Event::Partial("一".into())));
+        let partials = ev.iter().filter(|e| **e == Event::Partial("一".into())).count();
+        assert_eq!(partials, 1);
     }
 
     #[test]
@@ -361,10 +370,40 @@ mod tests {
     fn abort_marks_finished_without_events() {
         let mut s = session(rec(), vec![]);
         s.push(&[0.1; 320]);
-        s.abort();
+        assert!(s.abort());
         assert!(s.is_finished());
         assert_eq!(s.state(), State::Error);
         assert!(s.end_of_audio().is_empty());
+
+        let mut s = session(rec(), vec![]);
+        s.end_of_audio();
+        assert_eq!(s.state(), State::Done);
+        assert!(!s.abort());
+        assert_eq!(s.state(), State::Done);
+    }
+
+    #[test]
+    fn stop_with_zero_tail_finalizes_immediately() {
+        let mut s = Session::new(
+            SessionConfig { tail: 0, ..cfg() },
+            rec(),
+            Box::new(FakeVad::new(vec![Segment { start: 0, end: S }], S / 4)),
+            Arc::new(PostProcessor::empty()),
+        );
+        s.push(&audio(&[(S, 0.1)]));
+        let ev = s.stop();
+        assert_eq!(finals(&ev), vec!["一".to_string()]);
+        assert_eq!(ev.last(), Some(&Event::State(State::Done)));
+        assert!(s.is_finished());
+    }
+
+    #[test]
+    fn min_length_excludes_tail() {
+        let mut s = session(rec(), vec![Segment { start: 0, end: 4800 }]);
+        s.push(&audio(&[(4800, 0.1)]));
+        s.stop();
+        let ev = s.push(&audio(&[(S / 4, 0.1)]));
+        assert_eq!(finals(&ev), vec![String::new()]);
     }
 
     #[test]
