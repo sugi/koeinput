@@ -20,26 +20,45 @@ pub enum BuildError {
 }
 
 pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildError> {
-    let catalog = Catalog::load(&paths.catalog_file).map_err(|e| BuildError::Catalog(e.to_string()))?;
+    let catalog =
+        Catalog::load(&paths.catalog_file).map_err(|e| BuildError::Catalog(e.to_string()))?;
     let entry = match &cfg.model {
-        Some(id) => catalog.get(id).ok_or_else(|| BuildError::UnknownModel(id.clone()))?,
-        None => catalog.default_model().ok_or_else(|| BuildError::Catalog("no default model".into()))?,
+        Some(id) => catalog
+            .get(id)
+            .ok_or_else(|| BuildError::UnknownModel(id.clone()))?,
+        None => catalog
+            .default_model()
+            .ok_or_else(|| BuildError::Catalog("no default model".into()))?,
     };
-    let vad_entry = catalog.get(VAD_MODEL_ID).ok_or_else(|| BuildError::Catalog("no silero-vad entry".into()))?;
+    let vad_entry = catalog
+        .get(VAD_MODEL_ID)
+        .ok_or_else(|| BuildError::Catalog("no silero-vad entry".into()))?;
     for e in [entry, vad_entry] {
         if !e.is_installed(&paths.models_dir) {
-            return Err(BuildError::NoModel { id: e.id.clone(), hint: format!("koeinput model install {}", e.id) });
+            return Err(BuildError::NoModel {
+                id: e.id.clone(),
+                hint: format!("koeinput model install {}", e.id),
+            });
         }
     }
-    let dict_path = cfg.dictionary.clone().unwrap_or_else(|| paths.dictionary_file.clone());
+    let dict_path = cfg
+        .dictionary
+        .clone()
+        .unwrap_or_else(|| paths.dictionary_file.clone());
     let dict = load_dictionary(&dict_path).map_err(|e| BuildError::Load(e.to_string()))?;
     for w in &dict.warnings {
         tracing::warn!("{w}");
     }
     let rec = SherpaOffline::new(entry, &paths.models_dir, effective_threads(cfg.threads))
         .map_err(|e| BuildError::Load(e.to_string()))?;
-    let vad_model = vad_entry.file(&paths.models_dir, "model").map_err(|e| BuildError::Load(e.to_string()))?;
-    let vad: VadFactory = Arc::new(move || SileroVad::new(&vad_model).map(|v| Box::new(v) as Box<dyn Vad>).map_err(|e| e.to_string()));
+    let vad_model = vad_entry
+        .file(&paths.models_dir, "model")
+        .map_err(|e| BuildError::Load(e.to_string()))?;
+    let vad: VadFactory = Arc::new(move || {
+        SileroVad::new(&vad_model)
+            .map(|v| Box::new(v) as Box<dyn Vad>)
+            .map_err(|e| e.to_string())
+    });
     let engine = Engine {
         cfg: SessionConfig::from_config(cfg),
         rec: Arc::new(rec),
@@ -69,14 +88,24 @@ mod tests {
             config_file: tmp.path().join("config.toml"),
             dictionary_file: tmp.path().join("dictionary.toml"),
             models_dir: tmp.path().join("models"),
-            catalog_file: Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/models.toml")).into(),
+            catalog_file: Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../data/models.toml"
+            ))
+            .into(),
         };
         let cfg = Config::default();
         let missing = |p: &Paths| match load_engine(p, &cfg) {
             Err(BuildError::NoModel { id, hint }) => (id, hint),
             other => panic!("expected NoModel, got {:?}", other.err()),
         };
-        assert_eq!(missing(&paths), ("parakeet-ja".into(), "koeinput model install parakeet-ja".into()));
+        assert_eq!(
+            missing(&paths),
+            (
+                "parakeet-ja".into(),
+                "koeinput model install parakeet-ja".into()
+            )
+        );
 
         let catalog = Catalog::load(&paths.catalog_file).unwrap();
         let rec = catalog.default_model().unwrap();
@@ -85,7 +114,13 @@ mod tests {
         for f in rec.files.values() {
             std::fs::write(dir.join(f), b"x").unwrap();
         }
-        assert_eq!(missing(&paths), ("silero-vad".into(), "koeinput model install silero-vad".into()));
+        assert_eq!(
+            missing(&paths),
+            (
+                "silero-vad".into(),
+                "koeinput model install silero-vad".into()
+            )
+        );
     }
 
     #[test]

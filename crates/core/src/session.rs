@@ -73,7 +73,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(cfg: SessionConfig, rec: Arc<dyn Recognizer>, vad: Box<dyn Vad>, post: Arc<PostProcessor>) -> Self {
+    pub fn new(
+        cfg: SessionConfig,
+        rec: Arc<dyn Recognizer>,
+        vad: Box<dyn Vad>,
+        post: Arc<PostProcessor>,
+    ) -> Self {
         Self {
             cfg,
             rec,
@@ -205,7 +210,10 @@ impl Session {
     fn partial_text(&self) -> Result<String, RecognizerError> {
         let mut parts = self.fixed.clone();
         if let Some(start) = self.vad.speech_start() {
-            parts.push(self.decode(Segment { start, end: self.audio.len() })?);
+            parts.push(self.decode(Segment {
+                start,
+                end: self.audio.len(),
+            })?);
         }
         Ok(self.post.apply(&join_segments(&parts)))
     }
@@ -232,7 +240,10 @@ impl Session {
 
     fn fail(&mut self, mut ev: Vec<Event>, e: RecognizerError) -> Vec<Event> {
         self.state = State::Error;
-        ev.push(Event::Error { code: "model".into(), message: e.to_string() });
+        ev.push(Event::Error {
+            code: "model".into(),
+            message: e.to_string(),
+        });
         ev.push(Event::State(State::Error));
         ev
     }
@@ -246,40 +257,76 @@ mod tests {
     const S: usize = 16000;
 
     fn cfg() -> SessionConfig {
-        SessionConfig { partial_interval: S / 2, tail: S / 4, min_length: S / 2, max_length: 10 * S }
+        SessionConfig {
+            partial_interval: S / 2,
+            tail: S / 4,
+            min_length: S / 2,
+            max_length: 10 * S,
+        }
     }
 
     // Each test segment is filled with a distinct level; the fake maps the mean level to a word.
     fn rec() -> Arc<FakeRecognizer> {
         Arc::new(FakeRecognizer::new(|s| {
             let mean = s.iter().sum::<f32>() / s.len().max(1) as f32;
-            Ok(if mean > 0.15 { "二".into() } else if mean > 0.05 { "一".into() } else { String::new() })
+            Ok(if mean > 0.15 {
+                "二".into()
+            } else if mean > 0.05 {
+                "一".into()
+            } else {
+                String::new()
+            })
         }))
     }
 
     fn audio(parts: &[(usize, f32)]) -> Vec<f32> {
-        parts.iter().flat_map(|(n, v)| std::iter::repeat_n(*v, *n)).collect()
+        parts
+            .iter()
+            .flat_map(|(n, v)| std::iter::repeat_n(*v, *n))
+            .collect()
     }
 
     fn session(r: Arc<FakeRecognizer>, segs: Vec<Segment>) -> Session {
-        Session::new(cfg(), r, Box::new(FakeVad::new(segs, S / 4)), Arc::new(PostProcessor::empty()))
+        Session::new(
+            cfg(),
+            r,
+            Box::new(FakeVad::new(segs, S / 4)),
+            Arc::new(PostProcessor::empty()),
+        )
     }
 
     fn finals(ev: &[Event]) -> Vec<String> {
-        ev.iter().filter_map(|e| if let Event::Final(t) = e { Some(t.clone()) } else { None }).collect()
+        ev.iter()
+            .filter_map(|e| {
+                if let Event::Final(t) = e {
+                    Some(t.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     #[test]
     fn first_audio_emits_recording_once() {
         let mut s = session(rec(), vec![]);
         assert_eq!(s.push(&[0.0; 320]), vec![Event::State(State::Recording)]);
-        assert!(!s.push(&[0.0; 320]).contains(&Event::State(State::Recording)));
+        assert!(
+            !s.push(&[0.0; 320])
+                .contains(&Event::State(State::Recording))
+        );
     }
 
     #[test]
     fn partials_follow_audio_time_and_never_queue() {
         let r = rec();
-        let mut s = session(r.clone(), vec![Segment { start: 0, end: 4 * S }]);
+        let mut s = session(
+            r.clone(),
+            vec![Segment {
+                start: 0,
+                end: 4 * S,
+            }],
+        );
         let mut ev = Vec::new();
         for chunk in audio(&[(4 * S, 0.1)]).chunks(320).take(S / 320) {
             ev.extend(s.push(chunk));
@@ -288,13 +335,25 @@ mod tests {
         assert_eq!(before, 2, "decodes in 1 s of audio");
         s.push(&audio(&[(2 * S, 0.1)]));
         assert_eq!(r.calls(), before + 1);
-        let partials = ev.iter().filter(|e| **e == Event::Partial("一".into())).count();
+        let partials = ev
+            .iter()
+            .filter(|e| **e == Event::Partial("一".into()))
+            .count();
         assert_eq!(partials, 1);
     }
 
     #[test]
     fn finished_segments_are_fixed_and_ordered() {
-        let mut s = session(rec(), vec![Segment { start: 0, end: S }, Segment { start: 2 * S, end: 3 * S }]);
+        let mut s = session(
+            rec(),
+            vec![
+                Segment { start: 0, end: S },
+                Segment {
+                    start: 2 * S,
+                    end: 3 * S,
+                },
+            ],
+        );
         let mut ev = s.push(&audio(&[(S, 0.1), (S, 0.0), (S, 0.2), (S, 0.0)]));
         ev.extend(s.end_of_audio());
         assert_eq!(finals(&ev), vec!["一二".to_string()]);
@@ -303,7 +362,13 @@ mod tests {
 
     #[test]
     fn stop_waits_for_tail() {
-        let mut s = session(rec(), vec![Segment { start: 0, end: 2 * S }]);
+        let mut s = session(
+            rec(),
+            vec![Segment {
+                start: 0,
+                end: 2 * S,
+            }],
+        );
         s.push(&audio(&[(S, 0.1)]));
         let ev = s.stop();
         assert_eq!(ev, vec![Event::State(State::Finalizing)]);
@@ -319,14 +384,27 @@ mod tests {
     fn stop_before_audio_gives_empty_final() {
         let mut s = session(rec(), vec![]);
         let ev = s.stop();
-        assert_eq!(ev, vec![Event::State(State::Finalizing), Event::Final(String::new()), Event::State(State::Done)]);
+        assert_eq!(
+            ev,
+            vec![
+                Event::State(State::Finalizing),
+                Event::Final(String::new()),
+                Event::State(State::Done)
+            ]
+        );
         assert!(s.is_finished());
         assert!(s.push(&[0.1; 320]).is_empty());
     }
 
     #[test]
     fn short_or_silent_recordings_give_empty_final() {
-        let mut s = session(rec(), vec![Segment { start: 0, end: S / 4 }]);
+        let mut s = session(
+            rec(),
+            vec![Segment {
+                start: 0,
+                end: S / 4,
+            }],
+        );
         s.push(&audio(&[(S / 4, 0.1)]));
         assert_eq!(finals(&s.end_of_audio()), vec![String::new()]);
         let mut s = session(rec(), vec![]);
@@ -336,7 +414,13 @@ mod tests {
 
     #[test]
     fn cancel_emits_cancelled_and_no_final() {
-        let mut s = session(rec(), vec![Segment { start: 0, end: 2 * S }]);
+        let mut s = session(
+            rec(),
+            vec![Segment {
+                start: 0,
+                end: 2 * S,
+            }],
+        );
         s.push(&audio(&[(S, 0.1)]));
         assert_eq!(s.cancel(), vec![Event::State(State::Cancelled)]);
         assert!(s.end_of_audio().is_empty());
@@ -346,7 +430,10 @@ mod tests {
     #[test]
     fn max_length_finalizes_automatically() {
         let mut s = Session::new(
-            SessionConfig { max_length: 2 * S, ..cfg() },
+            SessionConfig {
+                max_length: 2 * S,
+                ..cfg()
+            },
             rec(),
             Box::new(FakeVad::always_speech()),
             Arc::new(PostProcessor::empty()),
@@ -358,10 +445,15 @@ mod tests {
 
     #[test]
     fn recognizer_error_ends_session_with_error() {
-        let r = Arc::new(FakeRecognizer::new(|_| Err(RecognizerError::Decode("boom".into()))));
+        let r = Arc::new(FakeRecognizer::new(|_| {
+            Err(RecognizerError::Decode("boom".into()))
+        }));
         let mut s = session(r, vec![Segment { start: 0, end: S }]);
         let ev = s.push(&audio(&[(2 * S, 0.1)]));
-        assert!(ev.iter().any(|e| matches!(e, Event::Error { code, .. } if code == "model")));
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Error { code, .. } if code == "model"))
+        );
         assert_eq!(ev.last(), Some(&Event::State(State::Error)));
         assert!(s.is_finished());
     }
@@ -399,7 +491,13 @@ mod tests {
 
     #[test]
     fn min_length_excludes_tail() {
-        let mut s = session(rec(), vec![Segment { start: 0, end: 4800 }]);
+        let mut s = session(
+            rec(),
+            vec![Segment {
+                start: 0,
+                end: 4800,
+            }],
+        );
         s.push(&audio(&[(4800, 0.1)]));
         s.stop();
         let ev = s.push(&audio(&[(S / 4, 0.1)]));
@@ -409,7 +507,12 @@ mod tests {
     #[test]
     fn final_text_is_post_processed() {
         let post = Arc::new(PostProcessor::new(vec![("一".into(), "壱".into())]));
-        let mut s = Session::new(cfg(), rec(), Box::new(FakeVad::new(vec![Segment { start: 0, end: S }], S / 4)), post);
+        let mut s = Session::new(
+            cfg(),
+            rec(),
+            Box::new(FakeVad::new(vec![Segment { start: 0, end: S }], S / 4)),
+            post,
+        );
         s.push(&audio(&[(2 * S, 0.1)]));
         assert_eq!(finals(&s.end_of_audio()), vec!["壱".to_string()]);
     }

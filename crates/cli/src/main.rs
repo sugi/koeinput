@@ -40,14 +40,21 @@ enum ModelCmd {
         #[arg(long)]
         from_file: Option<PathBuf>,
     },
-    Remove { id: String },
-    Use { id: String },
+    Remove {
+        id: String,
+    },
+    Use {
+        id: String,
+    },
 }
 
 fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
-    ).init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
+        )
+        .init();
     let cli = Cli::parse();
     let paths = koeinput_core::config::Paths::from_env();
     let result = match cli.cmd {
@@ -56,7 +63,9 @@ fn main() -> std::process::ExitCode {
         Cmd::Transcribe { partials, files } => transcribe::run(&paths, partials, &files),
         Cmd::Model { cmd } => match cmd {
             ModelCmd::List => model_cmd::list(&paths),
-            ModelCmd::Install { id, from_file } => model_cmd::install(&paths, &id, from_file.as_deref()),
+            ModelCmd::Install { id, from_file } => {
+                model_cmd::install(&paths, &id, from_file.as_deref())
+            }
             ModelCmd::Remove { id } => model_cmd::remove(&paths, &id),
             ModelCmd::Use { id } => model_cmd::use_model(&paths, &id),
         },

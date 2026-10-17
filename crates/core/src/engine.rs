@@ -16,9 +16,14 @@ pub enum Source {
     File(PathBuf),
     Samples(Vec<f32>),
     #[cfg(any(test, feature = "test-hooks"))]
-    Generator { level: f32 },
+    Generator {
+        level: f32,
+    },
     #[cfg(test)]
-    StallingGenerator { level: f32, chunks: usize },
+    StallingGenerator {
+        level: f32,
+        chunks: usize,
+    },
 }
 
 pub type VadFactory = Arc<dyn Fn() -> Result<Box<dyn Vad>, String> + Send + Sync>;
@@ -60,7 +65,10 @@ impl Engine {
             .name("koeinput-session".into())
             .spawn(move || engine.run(source, ev_tx, cmd_rx))
             .expect("spawn session thread");
-        SessionHandle { events: ev_rx, cmd: cmd_tx }
+        SessionHandle {
+            events: ev_rx,
+            cmd: cmd_tx,
+        }
     }
 
     fn run(&self, source: Source, ev: Sender<Event>, cmd: Receiver<Command>) {
@@ -86,11 +94,21 @@ impl Engine {
             }
             #[cfg(any(test, feature = "test-hooks"))]
             Source::Generator { level } => {
-                return self.run_live(&mut session, LiveSource::Generator(level, None), &send, &cmd);
+                return self.run_live(
+                    &mut session,
+                    LiveSource::Generator(level, None),
+                    &send,
+                    &cmd,
+                );
             }
             #[cfg(test)]
             Source::StallingGenerator { level, chunks } => {
-                return self.run_live(&mut session, LiveSource::Generator(level, Some(chunks)), &send, &cmd);
+                return self.run_live(
+                    &mut session,
+                    LiveSource::Generator(level, Some(chunks)),
+                    &send,
+                    &cmd,
+                );
             }
         };
         for chunk in samples.chunks(CHUNK) {
@@ -107,7 +125,13 @@ impl Engine {
 }
 
 fn fail(code: &str, message: String) -> Vec<Event> {
-    vec![Event::Error { code: code.into(), message }, Event::State(State::Error)]
+    vec![
+        Event::Error {
+            code: code.into(),
+            message,
+        },
+        Event::State(State::Error),
+    ]
 }
 
 enum LiveSource {
@@ -160,10 +184,18 @@ impl Running {
 }
 
 fn fail_and_finish(session: &mut Session, code: &str, message: String) -> Vec<Event> {
-    if session.abort() { fail(code, message) } else { Vec::new() }
+    if session.abort() {
+        fail(code, message)
+    } else {
+        Vec::new()
+    }
 }
 
-fn apply_command(session: &mut Session, stop_requested: &mut bool, c: Option<Command>) -> Vec<Event> {
+fn apply_command(
+    session: &mut Session,
+    stop_requested: &mut bool,
+    c: Option<Command>,
+) -> Vec<Event> {
     match c {
         Some(Command::Stop) => {
             *stop_requested = true;
@@ -174,7 +206,13 @@ fn apply_command(session: &mut Session, stop_requested: &mut bool, c: Option<Com
 }
 
 impl Engine {
-    fn run_live(&self, session: &mut Session, src: LiveSource, send: &dyn Fn(Vec<Event>), cmd: &Receiver<Command>) {
+    fn run_live(
+        &self,
+        session: &mut Session,
+        src: LiveSource,
+        send: &dyn Fn(Vec<Event>),
+        cmd: &Receiver<Command>,
+    ) {
         let (cap_tx, cap_rx) = unbounded();
         let mut running = Some(Running::start(src, cap_tx));
         let mut stop_requested = false;
@@ -260,7 +298,12 @@ mod tests {
 
     fn engine() -> Engine {
         Engine {
-            cfg: SessionConfig { partial_interval: 8000, tail: 4000, min_length: 8000, max_length: 160_000 },
+            cfg: SessionConfig {
+                partial_interval: 8000,
+                tail: 4000,
+                min_length: 8000,
+                max_length: 160_000,
+            },
             rec: Arc::new(FakeRecognizer::new(|s| Ok(format!("{}", s.len() / 16000)))),
             vad: Arc::new(|| Ok(Box::new(FakeVad::always_speech()) as Box<dyn Vad>)),
             post: Arc::new(PostProcessor::empty()),
@@ -270,7 +313,10 @@ mod tests {
     fn collect(h: &SessionHandle) -> Vec<Event> {
         let mut out = Vec::new();
         while let Ok(e) = h.events.recv_timeout(Duration::from_secs(10)) {
-            let done = matches!(e, Event::State(State::Done | State::Cancelled | State::Error));
+            let done = matches!(
+                e,
+                Event::State(State::Done | State::Cancelled | State::Error)
+            );
             out.push(e);
             if done {
                 break;
@@ -305,11 +351,18 @@ mod tests {
 
     #[test]
     fn stall_after_stop_still_delivers_final() {
-        let h = engine().start(Source::StallingGenerator { level: 0.1, chunks: 40 });
+        let h = engine().start(Source::StallingGenerator {
+            level: 0.1,
+            chunks: 40,
+        });
         std::thread::sleep(Duration::from_millis(1200));
         h.stop();
         let ev = collect(&h);
-        assert!(ev.iter().any(|e| matches!(e, Event::Final(t) if !t.is_empty())), "{ev:?}");
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Final(t) if !t.is_empty())),
+            "{ev:?}"
+        );
         assert_eq!(ev.last(), Some(&Event::State(State::Done)), "{ev:?}");
     }
 
@@ -328,7 +381,11 @@ mod tests {
         unsafe { std::env::set_var("PULSE_SERVER", "unix:/nonexistent/koeinput-test") };
         let h = engine().start(Source::Microphone(None));
         let ev = collect(&h);
-        assert!(ev.iter().any(|e| matches!(e, Event::Error { code, .. } if code == "audio")), "{ev:?}");
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Error { code, .. } if code == "audio")),
+            "{ev:?}"
+        );
         assert_eq!(ev.last(), Some(&Event::State(State::Error)));
     }
 
@@ -336,14 +393,22 @@ mod tests {
     fn missing_file_reports_audio_error() {
         let h = engine().start(Source::File("/nonexistent.wav".into()));
         let ev = collect(&h);
-        assert!(ev.iter().any(|e| matches!(e, Event::Error { code, .. } if code == "audio")));
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Error { code, .. } if code == "audio"))
+        );
         assert_eq!(ev.last(), Some(&Event::State(State::Error)));
     }
 
     #[test]
     fn slow_recognizer_still_covers_all_audio() {
         let eng = Engine {
-            cfg: SessionConfig { partial_interval: 1600, tail: 0, min_length: 1600, max_length: 1_600_000 },
+            cfg: SessionConfig {
+                partial_interval: 1600,
+                tail: 0,
+                min_length: 1600,
+                max_length: 1_600_000,
+            },
             rec: Arc::new(FakeRecognizer::new(|s| {
                 std::thread::sleep(Duration::from_millis(300));
                 Ok(s.len().to_string())

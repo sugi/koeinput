@@ -5,7 +5,16 @@ use std::sync::LazyLock;
 static ARTEFACT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:language\s+[A-Za-z]+\s*)?</?asr_text>|<\|[^|>]*\|>").unwrap());
 
-const FILLERS: [&str; 8] = ["えーっと", "えーと", "えっと", "あのー", "そのー", "うーん", "えー", "んー"];
+const FILLERS: [&str; 8] = [
+    "えーっと",
+    "えーと",
+    "えっと",
+    "あのー",
+    "そのー",
+    "うーん",
+    "えー",
+    "んー",
+];
 
 pub struct PostProcessor {
     dict: Vec<(String, String)>,
@@ -126,7 +135,10 @@ pub fn load_dictionary(path: &Path) -> std::io::Result<DictionaryLoad> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(DictionaryLoad { pairs: Vec::new(), warnings: Vec::new() });
+            return Ok(DictionaryLoad {
+                pairs: Vec::new(),
+                warnings: Vec::new(),
+            });
         }
         Err(e) => return Err(e),
     };
@@ -140,7 +152,11 @@ pub fn load_dictionary(path: &Path) -> std::io::Result<DictionaryLoad> {
         }
         match line.split_once('\t') {
             Some((k, v)) if !k.is_empty() => pairs.push((k.to_string(), v.to_string())),
-            _ => warnings.push(format!("{}: line {}: expected \"wrong<TAB>right\"", path.display(), i + 1)),
+            _ => warnings.push(format!(
+                "{}: line {}: expected \"wrong<TAB>right\"",
+                path.display(),
+                i + 1
+            )),
         }
     }
     Ok(DictionaryLoad { pairs, warnings })
@@ -151,20 +167,35 @@ mod tests {
     use super::*;
 
     fn pp(pairs: &[(&str, &str)]) -> PostProcessor {
-        PostProcessor::new(pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect())
+        PostProcessor::new(
+            pairs
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+        )
     }
 
     #[test]
     fn strips_qwen_and_sensevoice_artefacts() {
         let p = PostProcessor::empty();
-        assert_eq!(p.apply("language Japanese<asr_text>こんにちは"), "こんにちは");
-        assert_eq!(p.apply("前の文。language Japanese<asr_text>次の文"), "前の文。次の文");
+        assert_eq!(
+            p.apply("language Japanese<asr_text>こんにちは"),
+            "こんにちは"
+        );
+        assert_eq!(
+            p.apply("前の文。language Japanese<asr_text>次の文"),
+            "前の文。次の文"
+        );
         assert_eq!(p.apply("<|ja|><|NEUTRAL|>テスト"), "テスト");
     }
 
     #[test]
     fn dictionary_longest_match_single_pass() {
-        let p = pp(&[("ウィスパー", "Whisper"), ("ウィスパーCPP", "whisper.cpp"), ("Whisper", "X")]);
+        let p = pp(&[
+            ("ウィスパー", "Whisper"),
+            ("ウィスパーCPP", "whisper.cpp"),
+            ("Whisper", "X"),
+        ]);
         assert_eq!(p.apply("ウィスパーCPPとウィスパー"), "whisper.cppとWhisper");
     }
 
@@ -179,7 +210,10 @@ mod tests {
     #[test]
     fn removes_spaces_between_japanese_only() {
         let p = PostProcessor::empty();
-        assert_eq!(p.apply(" 測る の は 次 の 項目 です。 "), "測るのは次の項目です。");
+        assert_eq!(
+            p.apply(" 測る の は 次 の 項目 です。 "),
+            "測るのは次の項目です。"
+        );
         assert_eq!(p.apply("git worktree を 使う"), "git worktree を使う");
         assert_eq!(p.apply("これは　全角"), "これは全角");
     }
@@ -203,11 +237,26 @@ mod tests {
     fn dictionary_tolerates_bom_crlf_comments_and_bad_lines() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("d.tsv");
-        std::fs::write(&p, "\u{feff}# comment\r\nラスト\tRust\r\n\r\nno tab here\r\n\tempty key\r\nギット\tgit\n").unwrap();
+        std::fs::write(
+            &p,
+            "\u{feff}# comment\r\nラスト\tRust\r\n\r\nno tab here\r\n\tempty key\r\nギット\tgit\n",
+        )
+        .unwrap();
         let d = load_dictionary(&p).unwrap();
-        assert_eq!(d.pairs, vec![("ラスト".into(), "Rust".into()), ("ギット".into(), "git".into())]);
+        assert_eq!(
+            d.pairs,
+            vec![
+                ("ラスト".into(), "Rust".into()),
+                ("ギット".into(), "git".into())
+            ]
+        );
         assert_eq!(d.warnings.len(), 2);
         assert!(d.warnings[0].contains("line 4"), "{:?}", d.warnings);
-        assert!(load_dictionary(&dir.path().join("missing.tsv")).unwrap().pairs.is_empty());
+        assert!(
+            load_dictionary(&dir.path().join("missing.tsv"))
+                .unwrap()
+                .pairs
+                .is_empty()
+        );
     }
 }

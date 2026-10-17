@@ -1,28 +1,48 @@
 use anyhow::{Context, Result, bail};
 use koeinput_core::config::{Paths, set_model};
-use koeinput_core::models::{Catalog, InstallSource, ModelEntry, VAD_MODEL_ID, install as install_model, remove as remove_model};
+use koeinput_core::models::{
+    Catalog, InstallSource, ModelEntry, VAD_MODEL_ID, install as install_model,
+    remove as remove_model,
+};
 use std::path::Path;
 
 fn catalog(paths: &Paths) -> Result<Catalog> {
-    Catalog::load(&paths.catalog_file).with_context(|| format!("reading {}", paths.catalog_file.display()))
+    Catalog::load(&paths.catalog_file)
+        .with_context(|| format!("reading {}", paths.catalog_file.display()))
 }
 
 fn entry<'a>(c: &'a Catalog, id: &str) -> Result<&'a ModelEntry> {
-    c.get(id).with_context(|| format!("unknown model {id}; see `koeinput model list`"))
+    c.get(id)
+        .with_context(|| format!("unknown model {id}; see `koeinput model list`"))
 }
 
 pub fn list(paths: &Paths) -> Result<()> {
     let c = catalog(paths)?;
     for m in &c.models {
-        let state = if m.is_installed(&paths.models_dir) { "installed" } else { "not installed" };
+        let state = if m.is_installed(&paths.models_dir) {
+            "installed"
+        } else {
+            "not installed"
+        };
         let default = if m.default { ", default" } else { "" };
-        println!("{:<20} {:>7.0} MB  {}{}  {} [{}]", m.id, m.size as f64 / 1e6, state, default, m.name, m.license);
+        println!(
+            "{:<20} {:>7.0} MB  {}{}  {} [{}]",
+            m.id,
+            m.size as f64 / 1e6,
+            state,
+            default,
+            m.name,
+            m.license
+        );
     }
     Ok(())
 }
 
 fn install_one(paths: &Paths, m: &ModelEntry, file: Option<&Path>) -> Result<()> {
-    let source = match file { Some(f) => InstallSource::File(f), None => InstallSource::Url };
+    let source = match file {
+        Some(f) => InstallSource::File(f),
+        None => InstallSource::Url,
+    };
     let mut last = 0u64;
     install_model(m, source, &paths.models_dir, &mut |done, total| {
         if done - last >= 16 << 20 || done == total {
@@ -31,7 +51,11 @@ fn install_one(paths: &Paths, m: &ModelEntry, file: Option<&Path>) -> Result<()>
         }
     })
     .with_context(|| format!("installing {}", m.id))?;
-    eprintln!("\r{}: installed in {}", m.id, m.dir(&paths.models_dir).display());
+    eprintln!(
+        "\r{}: installed in {}",
+        m.id,
+        m.dir(&paths.models_dir).display()
+    );
     Ok(())
 }
 

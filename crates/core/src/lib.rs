@@ -6,9 +6,9 @@ pub mod models;
 pub mod postprocess;
 pub mod recognizer;
 pub mod session;
-pub mod vad;
 #[cfg(any(test, feature = "test-hooks"))]
 pub mod testing;
+pub mod vad;
 
 pub const SAMPLE_RATE: u32 = 16000;
 

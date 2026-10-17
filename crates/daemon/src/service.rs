@@ -3,10 +3,10 @@ use koeinput_core::session::{Event, State};
 use koeinput_dbus_api::OBJECT_PATH;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use zbus::OwnedVariant;
 use zbus::message::Header;
 use zbus::names::{BusName, UniqueName};
 use zbus::object_server::SignalEmitter;
-use zbus::OwnedVariant;
 use zbus::{Connection, interface};
 
 #[derive(Debug, zbus::DBusError)]
@@ -56,8 +56,12 @@ impl Recognizer1 {
         if let Some(d) = test_delay("KOEINPUT_TEST_START_DELAY_MS") {
             tokio::time::sleep(d).await;
         }
-        let owner = hdr.sender().ok_or_else(|| KoeError::NoSuchSession("no sender".into()))?.to_owned();
-        let emitter = SignalEmitter::new(conn, OBJECT_PATH)?.set_destination(BusName::Unique(owner.clone()));
+        let owner = hdr
+            .sender()
+            .ok_or_else(|| KoeError::NoSuchSession("no sender".into()))?
+            .to_owned();
+        let emitter =
+            SignalEmitter::new(conn, OBJECT_PATH)?.set_destination(BusName::Unique(owner.clone()));
         let (id, handle) = {
             let mut s = self.shared.lock().unwrap();
             if s.current.is_some() {
@@ -65,14 +69,24 @@ impl Recognizer1 {
             }
             let engine = match &s.readiness {
                 Readiness::Ready(e) => e.clone(),
-                Readiness::Loading => return Err(KoeError::NoModel("the model is still loading".into())),
+                Readiness::Loading => {
+                    return Err(KoeError::NoModel("the model is still loading".into()));
+                }
                 Readiness::Missing(hint) => return Err(KoeError::NoModel(hint.clone())),
             };
             s.next_id += 1;
             let id = s.next_id;
-            let source = if s.test_source { test_source() } else { Source::Microphone(s.source.clone()) };
+            let source = if s.test_source {
+                test_source()
+            } else {
+                Source::Microphone(s.source.clone())
+            };
             let handle = Arc::new(engine.start(source));
-            s.current = Some(Current { id, owner: owner.clone(), handle: handle.clone() });
+            s.current = Some(Current {
+                id,
+                owner: owner.clone(),
+                handle: handle.clone(),
+            });
             (id, handle)
         };
         spawn_forwarder(emitter, self.shared.clone(), id, handle.clone());
@@ -113,13 +127,27 @@ impl Recognizer1 {
     }
 
     #[zbus(signal)]
-    pub async fn state_changed(emitter: &SignalEmitter<'_>, session: u32, state: &str) -> zbus::Result<()>;
+    pub async fn state_changed(
+        emitter: &SignalEmitter<'_>,
+        session: u32,
+        state: &str,
+    ) -> zbus::Result<()>;
     #[zbus(signal)]
-    pub async fn partial(emitter: &SignalEmitter<'_>, session: u32, text: &str) -> zbus::Result<()>;
+    pub async fn partial(emitter: &SignalEmitter<'_>, session: u32, text: &str)
+    -> zbus::Result<()>;
     #[zbus(signal, name = "Final")]
-    pub async fn final_text(emitter: &SignalEmitter<'_>, session: u32, text: &str) -> zbus::Result<()>;
+    pub async fn final_text(
+        emitter: &SignalEmitter<'_>,
+        session: u32,
+        text: &str,
+    ) -> zbus::Result<()>;
     #[zbus(signal)]
-    pub async fn error(emitter: &SignalEmitter<'_>, session: u32, code: &str, message: &str) -> zbus::Result<()>;
+    pub async fn error(
+        emitter: &SignalEmitter<'_>,
+        session: u32,
+        code: &str,
+        message: &str,
+    ) -> zbus::Result<()>;
 }
 
 impl Recognizer1 {
@@ -147,7 +175,11 @@ fn test_source() -> Source {
 
 #[cfg(feature = "test-hooks")]
 pub fn test_delay(var: &str) -> Option<std::time::Duration> {
-    std::env::var(var).ok()?.parse().ok().map(std::time::Duration::from_millis)
+    std::env::var(var)
+        .ok()?
+        .parse()
+        .ok()
+        .map(std::time::Duration::from_millis)
 }
 
 async fn caller_present(conn: &Connection, owner: &UniqueName<'static>) -> zbus::Result<bool> {
@@ -162,7 +194,12 @@ fn clear_current(shared: &Mutex<Shared>, id: u32) {
     }
 }
 
-async fn emit(emitter: &SignalEmitter<'_>, id: u32, ev: &Event, log_text: bool) -> zbus::Result<()> {
+async fn emit(
+    emitter: &SignalEmitter<'_>,
+    id: u32,
+    ev: &Event,
+    log_text: bool,
+) -> zbus::Result<()> {
     match ev {
         Event::State(st) => {
             tracing::info!(session = id, state = st.as_str());
@@ -182,7 +219,12 @@ async fn emit(emitter: &SignalEmitter<'_>, id: u32, ev: &Event, log_text: bool) 
     }
 }
 
-fn spawn_forwarder(emitter: SignalEmitter<'static>, shared: Arc<Mutex<Shared>>, id: u32, handle: Arc<SessionHandle>) {
+fn spawn_forwarder(
+    emitter: SignalEmitter<'static>,
+    shared: Arc<Mutex<Shared>>,
+    id: u32,
+    handle: Arc<SessionHandle>,
+) {
     let rt = tokio::runtime::Handle::current();
     let log_text = std::env::var("KOEINPUT_LOG_TEXT").as_deref() == Ok("1");
     tokio::task::spawn_blocking(move || {
@@ -193,7 +235,10 @@ fn spawn_forwarder(emitter: SignalEmitter<'static>, shared: Arc<Mutex<Shared>>, 
         };
         // The session is cleared before its terminal state goes out, so a client may start again on receipt.
         while let Ok(ev) = handle.events.recv() {
-            if matches!(ev, Event::State(State::Done | State::Cancelled | State::Error)) {
+            if matches!(
+                ev,
+                Event::State(State::Done | State::Cancelled | State::Error)
+            ) {
                 clear_current(&shared, id);
                 forward(&ev);
                 return;
@@ -202,7 +247,10 @@ fn spawn_forwarder(emitter: SignalEmitter<'static>, shared: Arc<Mutex<Shared>>, 
         }
         // The worker dropped its sender without a terminal state, which means it panicked.
         clear_current(&shared, id);
-        forward(&Event::Error { code: "internal".into(), message: "session ended unexpectedly".into() });
+        forward(&Event::Error {
+            code: "internal".into(),
+            message: "session ended unexpectedly".into(),
+        });
         forward(&Event::State(State::Error));
     });
 }

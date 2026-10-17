@@ -144,10 +144,9 @@ fn stage(
     std::fs::create_dir_all(staging)?;
     match entry.format.as_str() {
         "file" => {
-            let name = entry
-                .files
-                .get("model")
-                .ok_or_else(|| ModelError::MissingFile(format!("{}: no file role model", entry.id)))?;
+            let name = entry.files.get("model").ok_or_else(|| {
+                ModelError::MissingFile(format!("{}: no file role model", entry.id))
+            })?;
             let target = checked_join(staging, Path::new(name))?;
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -292,10 +291,17 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert("model".to_string(), "m.onnx".to_string());
         ModelEntry {
-            id: "t".into(), name: "t".into(), kind: "nemo_ctc".into(), url: "file:///none".into(),
-            sha256: hex::encode(Sha256::digest(bytes)), size: bytes.len() as u64,
-            license: "x".into(), format: format.into(), archive_root: Some("root".into()),
-            default: false, files,
+            id: "t".into(),
+            name: "t".into(),
+            kind: "nemo_ctc".into(),
+            url: "file:///none".into(),
+            sha256: hex::encode(Sha256::digest(bytes)),
+            size: bytes.len() as u64,
+            license: "x".into(),
+            format: format.into(),
+            archive_root: Some("root".into()),
+            default: false,
+            files,
         }
     }
 
@@ -307,7 +313,11 @@ mod tests {
 
     #[test]
     fn repository_catalog_parses_and_has_defaults() {
-        let c = Catalog::load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/models.toml"))).unwrap();
+        let c = Catalog::load(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../data/models.toml"
+        )))
+        .unwrap();
         assert_eq!(c.default_model().unwrap().id, DEFAULT_MODEL_ID);
         assert!(c.get(VAD_MODEL_ID).is_some());
         for m in &c.models {
@@ -319,7 +329,10 @@ mod tests {
     #[test]
     fn installs_archive_and_strips_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let bytes = bz_tar(&[("root/m.onnx", b"onnx", tar::EntryType::Regular), ("root/extra/x.txt", b"x", tar::EntryType::Regular)]);
+        let bytes = bz_tar(&[
+            ("root/m.onnx", b"onnx", tar::EntryType::Regular),
+            ("root/extra/x.txt", b"x", tar::EntryType::Regular),
+        ]);
         let src = write_tmp(tmp.path(), &bytes);
         let e = entry_for(&bytes, "tar.bz2");
         let models = tmp.path().join("models");
@@ -337,10 +350,15 @@ mod tests {
         let mut e = entry_for(&bytes, "tar.bz2");
         e.sha256 = "0".repeat(64);
         let models = tmp.path().join("models");
-        assert!(matches!(install(&e, InstallSource::File(&src), &models, &mut |_, _| {}), Err(ModelError::Checksum { .. })));
+        assert!(matches!(
+            install(&e, InstallSource::File(&src), &models, &mut |_, _| {}),
+            Err(ModelError::Checksum { .. })
+        ));
         assert!(!e.is_installed(&models));
         assert!(!e.dir(&models).exists());
-        let leftovers: Vec<_> = std::fs::read_dir(&models).map(|d| d.collect()).unwrap_or_default();
+        let leftovers: Vec<_> = std::fs::read_dir(&models)
+            .map(|d| d.collect())
+            .unwrap_or_default();
         assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
@@ -358,7 +376,10 @@ mod tests {
             let e = entry_for(&bytes, "tar.bz2");
             let models = tmp.path().join("models");
             let r = install(&e, InstallSource::File(&src), &models, &mut |_, _| {});
-            assert!(matches!(r, Err(ModelError::UnsafeArchive(_))), "{bad:?}: {r:?}");
+            assert!(
+                matches!(r, Err(ModelError::UnsafeArchive(_))),
+                "{bad:?}: {r:?}"
+            );
             assert!(!e.dir(&models).exists());
         }
     }
@@ -370,7 +391,10 @@ mod tests {
         let src = write_tmp(tmp.path(), &bytes);
         let e = entry_for(&bytes, "tar.bz2");
         let models = tmp.path().join("models");
-        assert!(matches!(install(&e, InstallSource::File(&src), &models, &mut |_, _| {}), Err(ModelError::MissingFile(_))));
+        assert!(matches!(
+            install(&e, InstallSource::File(&src), &models, &mut |_, _| {}),
+            Err(ModelError::MissingFile(_))
+        ));
         assert!(!e.dir(&models).exists());
     }
 

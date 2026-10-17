@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use zbus::proxy;
 use zbus::Variant;
+use zbus::proxy;
 
 pub const BUS_NAME: &str = "org.nemui.KoeInput";
 pub const OBJECT_PATH: &str = "/org/nemui/KoeInput";

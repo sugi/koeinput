@@ -19,7 +19,9 @@ pub fn run(paths: &Paths, partials: bool, files: &[PathBuf]) -> Result<()> {
         let handle = |events: Vec<Event>, at: usize, final_text: &mut String| -> Result<()> {
             for e in events {
                 match e {
-                    Event::Partial(t) if partials => println!("  [{:.2} s] {t}", at as f64 / SAMPLE_RATE as f64),
+                    Event::Partial(t) if partials => {
+                        println!("  [{:.2} s] {t}", at as f64 / SAMPLE_RATE as f64)
+                    }
                     Event::Final(t) => *final_text = t,
                     Event::Error { code, message } => return Err(anyhow!("{code}: {message}")),
                     _ => {}
@@ -36,7 +38,11 @@ pub fn run(paths: &Paths, partials: bool, files: &[PathBuf]) -> Result<()> {
         let after = t.elapsed();
         handle(ev, pushed, &mut final_text)?;
         println!("  {final_text}");
-        println!("  audio {:.2} s, final {:.2} s after end of audio", pushed as f64 / SAMPLE_RATE as f64, after.as_secs_f64());
+        println!(
+            "  audio {:.2} s, final {:.2} s after end of audio",
+            pushed as f64 / SAMPLE_RATE as f64,
+            after.as_secs_f64()
+        );
     }
     Ok(())
 }

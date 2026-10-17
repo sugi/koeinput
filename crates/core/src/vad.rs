@@ -33,7 +33,10 @@ pub struct SileroVad {
 impl SileroVad {
     pub fn new(model: &Path) -> Result<Self, VadError> {
         if !model.exists() {
-            return Err(VadError::Model(format!("{} is missing; run `koeinput model install silero-vad`", model.display())));
+            return Err(VadError::Model(format!(
+                "{} is missing; run `koeinput model install silero-vad`",
+                model.display()
+            )));
         }
         let mut c = sherpa_onnx::VadModelConfig::default();
         c.silero_vad.model = Some(model.to_string_lossy().into_owned());
@@ -47,7 +50,12 @@ impl SileroVad {
         c.provider = Some("cpu".into());
         let vad = sherpa_onnx::VoiceActivityDetector::create(&c, 130.0)
             .ok_or_else(|| VadError::Model("sherpa-onnx could not load the VAD".into()))?;
-        Ok(Self { vad, fed: 0, last_end: 0, open_start: None })
+        Ok(Self {
+            vad,
+            fed: 0,
+            last_end: 0,
+            open_start: None,
+        })
     }
 
     // sherpa-onnx mis-segments when handed a large buffer in one call, so feed window-sized pieces.
@@ -119,16 +127,40 @@ mod tests {
 
     #[test]
     fn fake_vad_reports_open_and_finished_segments() {
-        let mut v = FakeVad::new(vec![Segment { start: 100, end: 200 }, Segment { start: 400, end: 500 }], 50);
+        let mut v = FakeVad::new(
+            vec![
+                Segment {
+                    start: 100,
+                    end: 200,
+                },
+                Segment {
+                    start: 400,
+                    end: 500,
+                },
+            ],
+            50,
+        );
         v.accept(&[0.0; 150]);
         assert_eq!(v.speech_start(), Some(100));
         assert!(v.pop_finished().is_empty());
         v.accept(&[0.0; 100]);
-        assert_eq!(v.pop_finished(), vec![Segment { start: 100, end: 200 }]);
+        assert_eq!(
+            v.pop_finished(),
+            vec![Segment {
+                start: 100,
+                end: 200
+            }]
+        );
         assert_eq!(v.speech_start(), None);
         v.accept(&[0.0; 200]);
         assert_eq!(v.speech_start(), Some(400));
-        assert_eq!(v.finish(), vec![Segment { start: 400, end: 450 }]);
+        assert_eq!(
+            v.finish(),
+            vec![Segment {
+                start: 400,
+                end: 450
+            }]
+        );
     }
 
     #[test]
@@ -151,7 +183,9 @@ mod tests {
 
     #[test]
     fn silero_finds_speech_between_silences_when_enabled() {
-        let Some((speech, model)) = sample_wav() else { return };
+        let Some((speech, model)) = sample_wav() else {
+            return;
+        };
         let mut audio = vec![0.0; 16000];
         audio.extend_from_slice(&speech);
         audio.extend(std::iter::repeat_n(0.0, 16000));
@@ -171,7 +205,9 @@ mod tests {
     // a chunked run reports at the same point; chunk granularity allows about two windows of drift.
     #[test]
     fn silero_speech_start_is_independent_of_buffer_size_when_enabled() {
-        let Some((speech, model)) = sample_wav() else { return };
+        let Some((speech, model)) = sample_wav() else {
+            return;
+        };
         let mut audio = vec![0.0; 16000];
         audio.extend_from_slice(&speech[..speech.len() / 2]);
 
@@ -179,17 +215,26 @@ mod tests {
         for c in audio.chunks(320) {
             chunked.accept(c);
         }
-        let reference = chunked.speech_start().expect("chunked run has an open segment");
+        let reference = chunked
+            .speech_start()
+            .expect("chunked run has an open segment");
 
         let mut one = SileroVad::new(&model).unwrap();
         one.accept(&audio);
-        let s = one.speech_start().expect("single buffer has an open segment");
-        assert!(s.abs_diff(reference) <= 1024, "single {s} vs chunked {reference}");
+        let s = one
+            .speech_start()
+            .expect("single buffer has an open segment");
+        assert!(
+            s.abs_diff(reference) <= 1024,
+            "single {s} vs chunked {reference}"
+        );
     }
 
     #[test]
     fn silero_finish_closes_segment_cut_mid_speech_when_enabled() {
-        let Some((speech, model)) = sample_wav() else { return };
+        let Some((speech, model)) = sample_wav() else {
+            return;
+        };
         let cut = &speech[..speech.len() / 2];
         let mut v = SileroVad::new(&model).unwrap();
         v.accept(cut);

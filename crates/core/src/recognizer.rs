@@ -21,11 +21,21 @@ pub struct SherpaOffline {
 }
 
 impl SherpaOffline {
-    pub fn new(entry: &ModelEntry, models_dir: &Path, threads: i32) -> Result<Self, RecognizerError> {
+    pub fn new(
+        entry: &ModelEntry,
+        models_dir: &Path,
+        threads: i32,
+    ) -> Result<Self, RecognizerError> {
         let path = |key: &str| -> Result<Option<String>, RecognizerError> {
-            let p = entry.file(models_dir, key).map_err(|e| RecognizerError::Model(e.to_string()))?;
+            let p = entry
+                .file(models_dir, key)
+                .map_err(|e| RecognizerError::Model(e.to_string()))?;
             if !p.exists() {
-                return Err(RecognizerError::Model(format!("{} is missing; run `koeinput model install {}`", p.display(), entry.id)));
+                return Err(RecognizerError::Model(format!(
+                    "{} is missing; run `koeinput model install {}`",
+                    p.display(),
+                    entry.id
+                )));
             }
             Ok(Some(p.to_string_lossy().into_owned()))
         };
@@ -67,8 +77,9 @@ impl SherpaOffline {
         m.num_threads = threads;
         m.provider = Some("cpu".into());
         c.decoding_method = Some("greedy_search".into());
-        let inner = sherpa_onnx::OfflineRecognizer::create(&c)
-            .ok_or_else(|| RecognizerError::Model(format!("sherpa-onnx could not load {}", entry.id)))?;
+        let inner = sherpa_onnx::OfflineRecognizer::create(&c).ok_or_else(|| {
+            RecognizerError::Model(format!("sherpa-onnx could not load {}", entry.id))
+        })?;
         Ok(Self { inner })
     }
 }
@@ -81,7 +92,9 @@ impl Recognizer for SherpaOffline {
         let s = self.inner.create_stream();
         s.accept_waveform(SAMPLE_RATE as i32, samples);
         self.inner.decode(&s);
-        Ok(s.get_result().map(|r| r.text.trim().to_string()).unwrap_or_default())
+        Ok(s.get_result()
+            .map(|r| r.text.trim().to_string())
+            .unwrap_or_default())
     }
 }
 
@@ -92,21 +105,31 @@ mod tests {
     use std::path::PathBuf;
 
     fn catalog() -> Catalog {
-        Catalog::load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/models.toml"))).unwrap()
+        Catalog::load(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../data/models.toml"
+        )))
+        .unwrap()
     }
 
     #[test]
     fn unknown_kind_is_rejected() {
         let mut e = catalog().get("parakeet-ja").unwrap().clone();
         e.kind = "whisper".into();
-        assert!(matches!(SherpaOffline::new(&e, Path::new("/x"), 1), Err(RecognizerError::UnsupportedKind(_))));
+        assert!(matches!(
+            SherpaOffline::new(&e, Path::new("/x"), 1),
+            Err(RecognizerError::UnsupportedKind(_))
+        ));
     }
 
     #[test]
     fn missing_model_files_are_reported_before_loading() {
         let e = catalog().get("parakeet-ja").unwrap().clone();
         let dir = tempfile::tempdir().unwrap();
-        assert!(matches!(SherpaOffline::new(&e, dir.path(), 1), Err(RecognizerError::Model(_))));
+        assert!(matches!(
+            SherpaOffline::new(&e, dir.path(), 1),
+            Err(RecognizerError::Model(_))
+        ));
     }
 
     #[test]
@@ -114,7 +137,9 @@ mod tests {
         if std::env::var("KOEINPUT_MODEL_TESTS").as_deref() != Ok("1") {
             return;
         }
-        let models = PathBuf::from(std::env::var("KOEINPUT_TEST_MODELS_DIR").expect("KOEINPUT_TEST_MODELS_DIR"));
+        let models = PathBuf::from(
+            std::env::var("KOEINPUT_TEST_MODELS_DIR").expect("KOEINPUT_TEST_MODELS_DIR"),
+        );
         let e = catalog().get("parakeet-ja").unwrap().clone();
         let r = SherpaOffline::new(&e, &models, 8).unwrap();
         let wav = e.dir(&models).join("test_wavs/test_ja_1.wav");

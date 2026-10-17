@@ -51,8 +51,9 @@ pub fn set_model(path: &Path, model_id: &str) -> Result<(), ConfigError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.into()),
     };
-    let mut doc: toml_edit::DocumentMut =
-        text.parse().map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
     doc["model"] = toml_edit::value(model_id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -76,8 +77,12 @@ impl Paths {
 
     pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Self {
         let home = PathBuf::from(get("HOME").unwrap_or_else(|| "/".into()));
-        let config_home = get("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or(home.join(".config"));
-        let data_home = get("XDG_DATA_HOME").map(PathBuf::from).unwrap_or(home.join(".local/share"));
+        let config_home = get("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or(home.join(".config"));
+        let data_home = get("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or(home.join(".local/share"));
         let catalog_dir = get("KOEINPUT_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/usr/share/koeinput"));
@@ -151,11 +156,23 @@ mod tests {
         .into();
         let p = Paths::from_vars(|k| vars.get(k).map(|v| v.to_string()));
         assert_eq!(p.config_file, PathBuf::from("/cfg/koeinput/config.toml"));
-        assert_eq!(p.dictionary_file, PathBuf::from("/cfg/koeinput/dictionary.tsv"));
-        assert_eq!(p.models_dir, PathBuf::from("/h/.local/share/koeinput/models"));
+        assert_eq!(
+            p.dictionary_file,
+            PathBuf::from("/cfg/koeinput/dictionary.tsv")
+        );
+        assert_eq!(
+            p.models_dir,
+            PathBuf::from("/h/.local/share/koeinput/models")
+        );
         assert_eq!(p.catalog_file, PathBuf::from("/repo/data/models.toml"));
         let p = Paths::from_vars(|k| (k == "HOME").then(|| "/h".to_string()));
-        assert_eq!(p.config_file, PathBuf::from("/h/.config/koeinput/config.toml"));
-        assert_eq!(p.catalog_file, PathBuf::from("/usr/share/koeinput/models.toml"));
+        assert_eq!(
+            p.config_file,
+            PathBuf::from("/h/.config/koeinput/config.toml")
+        );
+        assert_eq!(
+            p.catalog_file,
+            PathBuf::from("/usr/share/koeinput/models.toml")
+        );
     }
 }

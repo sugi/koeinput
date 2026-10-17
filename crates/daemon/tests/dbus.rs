@@ -34,7 +34,8 @@ impl Drop for Daemon {
 fn daemon_command(extra: &[(&str, &str)]) -> (Command, PathBuf) {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("dbus-{}-{n}", std::process::id()));
+    let dir =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("dbus-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_koeinput-daemon"));
     cmd.env("HOME", &dir)
@@ -54,15 +55,25 @@ async fn start_daemon(extra: &[(&str, &str)]) -> (Daemon, zbus::Connection) {
     let conn = zbus::Connection::session().await.unwrap();
     let dbus = zbus::fdo::DBusProxy::new(&conn).await.unwrap();
     for _ in 0..100 {
-        if !dbus.name_has_owner(BUS_NAME.try_into().unwrap()).await.unwrap() {
+        if !dbus
+            .name_has_owner(BUS_NAME.try_into().unwrap())
+            .await
+            .unwrap()
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let (mut cmd, dir) = daemon_command(extra);
-    let child = Daemon { child: cmd.spawn().unwrap(), dir, _turn: turn };
+    let child = Daemon {
+        child: cmd.spawn().unwrap(),
+        dir,
+        _turn: turn,
+    };
     for _ in 0..100 {
-        let owner = dbus.get_connection_unix_process_id(BUS_NAME.try_into().unwrap()).await;
+        let owner = dbus
+            .get_connection_unix_process_id(BUS_NAME.try_into().unwrap())
+            .await;
         if owner.is_ok_and(|pid| pid == child.child.id()) {
             return (child, conn);
         }
@@ -107,13 +118,24 @@ async fn start_stop_delivers_partial_and_final_to_caller_only() {
     assert_eq!(seen, vec!["starting".to_string(), "recording".to_string()]);
     tokio::time::sleep(Duration::from_millis(1200)).await;
     p.stop(id).await.unwrap();
-    let f = timeout(Duration::from_secs(5), finals.next()).await.unwrap().unwrap();
+    let f = timeout(Duration::from_secs(5), finals.next())
+        .await
+        .unwrap()
+        .unwrap();
     let a = f.args().unwrap();
     assert_eq!(a.session, id);
     assert!(!a.text.is_empty());
-    let partial = timeout(Duration::from_secs(1), partials.next()).await.expect("no Partial before Final").unwrap();
+    let partial = timeout(Duration::from_secs(1), partials.next())
+        .await
+        .expect("no Partial before Final")
+        .unwrap();
     assert_eq!(partial.args().unwrap().session, id);
-    assert!(timeout(Duration::from_millis(500), other_finals.next()).await.is_err(), "signal leaked to another client");
+    assert!(
+        timeout(Duration::from_millis(500), other_finals.next())
+            .await
+            .is_err(),
+        "signal leaked to another client"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -123,9 +145,16 @@ async fn second_start_is_busy_and_unknown_ids_are_rejected() {
     wait_ready(&p).await;
     let id = p.start(HashMap::new()).await.unwrap();
     let err = p.start(HashMap::new()).await.unwrap_err();
-    assert!(err.to_string().contains("org.nemui.KoeInput.Error.Busy"), "{err}");
+    assert!(
+        err.to_string().contains("org.nemui.KoeInput.Error.Busy"),
+        "{err}"
+    );
     let err = p.stop(id + 100).await.unwrap_err();
-    assert!(err.to_string().contains("org.nemui.KoeInput.Error.NoSuchSession"), "{err}");
+    assert!(
+        err.to_string()
+            .contains("org.nemui.KoeInput.Error.NoSuchSession"),
+        "{err}"
+    );
     p.cancel(id).await.unwrap();
 }
 
@@ -180,7 +209,10 @@ async fn worker_panic_ends_session_with_error_and_frees_the_daemon() {
     let mut errors = p.receive_error().await.unwrap();
     let id = p.start(HashMap::new()).await.unwrap();
 
-    let e = timeout(Duration::from_secs(5), errors.next()).await.unwrap().unwrap();
+    let e = timeout(Duration::from_secs(5), errors.next())
+        .await
+        .unwrap()
+        .unwrap();
     let a = e.args().unwrap();
     assert_eq!((a.session, a.code.as_str()), (id, "internal"));
     let mut last = String::new();
@@ -193,7 +225,10 @@ async fn worker_panic_ends_session_with_error_and_frees_the_daemon() {
         }
     }
     assert_eq!(last, "error");
-    let next = p.start(HashMap::new()).await.expect("daemon still busy after the worker panicked");
+    let next = p
+        .start(HashMap::new())
+        .await
+        .expect("daemon still busy after the worker panicked");
     assert_ne!(next, id);
 }
 
@@ -214,10 +249,16 @@ async fn second_daemon_does_not_take_over_the_name() {
     let _ = second.wait();
     let log = std::fs::read_to_string(dir.join("stderr.log")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(status.is_some_and(|s| !s.success()), "second daemon kept running: {status:?}\n{log}");
+    assert!(
+        status.is_some_and(|s| !s.success()),
+        "second daemon kept running: {status:?}\n{log}"
+    );
     assert!(log.contains("name already taken"), "{log}");
     let dbus = zbus::fdo::DBusProxy::new(&conn).await.unwrap();
-    let pid = dbus.get_connection_unix_process_id(BUS_NAME.try_into().unwrap()).await.unwrap();
+    let pid = dbus
+        .get_connection_unix_process_id(BUS_NAME.try_into().unwrap())
+        .await
+        .unwrap();
     assert_eq!(pid, d.child.id());
 }
 
@@ -240,7 +281,10 @@ async fn client_leaving_during_start_does_not_leave_a_session_behind() {
         // The daemon is still inside this Start when the bus reports that the caller has gone.
         let first = zbus::Connection::session().await.unwrap();
         let p1 = Recognizer1Proxy::new(&first).await.unwrap();
-        p1.inner().call_noreply("Start", &(HashMap::<&str, zbus::Variant<'_>>::new(),)).await.unwrap();
+        p1.inner()
+            .call_noreply("Start", &(HashMap::<&str, zbus::Variant<'_>>::new(),))
+            .await
+            .unwrap();
         drop(p1);
         first.close().await.unwrap();
     }
@@ -255,7 +299,10 @@ async fn client_leaving_during_start_does_not_leave_a_session_behind() {
             Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
         }
     }
-    assert!(ok, "the session of a client that left during Start kept running");
+    assert!(
+        ok,
+        "the session of a client that left during Start kept running"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
