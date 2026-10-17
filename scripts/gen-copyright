@@ -5,8 +5,9 @@ Usage: scripts/gen-copyright [--check]
 
 One paragraph per vendored crate comes from `cargo metadata` (the license
 expression) and from the copyright lines in the crate's license files; the
-tables below add paragraphs for C code bundled inside some crates, for the
-sherpa-onnx archive and for packaging/licenses/. The license texts come from
+tables below add holders that those files leave out, and paragraphs for files
+inside some crates under other licenses, for the sherpa-onnx archive and for
+packaging/licenses/. The license texts come from
 packaging/licenses/ or from a crate's own license file; texts in
 /usr/share/common-licenses/ are referenced.
 
@@ -124,8 +125,9 @@ Eigen, header-only: MPL-2.0, with some files under BSD and other
 NOT_LINKED = ["It is a build dependency of sherpa-onnx-sys; nothing of it is linked",
               "into the KoeInput binaries."]
 
-# C code bundled inside vendored crates under licenses other than the crate's own.
-# Patterns are relative to the crate's directory and must match files.
+# Files inside vendored crates under licenses other than the crate's own: bundled
+# C code, and tests and examples taken from other projects. Patterns are relative
+# to the crate's directory and must match files.
 BUNDLED = {
     "lzma-sys": [
         Paragraph(
@@ -167,6 +169,34 @@ BUNDLED = {
             ["xz-5.2/INSTALL.generic", "xz-5.2/m4/ax_check_capsicum.m4"],
             ["1994-2016 Free Software Foundation, Inc.", "2014 Google Inc.", "2015 Lasse Collin"],
             "FSFAP",
+        ),
+    ],
+    "crossbeam-channel": [
+        Paragraph(
+            ["tests/golang.rs"],
+            ["2009 The Go Authors"],
+            "BSD-3-Clause",
+            [
+                "Tests adapted from Go (https://github.com/golang/go); Go's license text",
+                "is in the crate's LICENSE-THIRD-PARTY. Tests are not built into the",
+                "KoeInput binaries.",
+            ],
+        ),
+        Paragraph(
+            ["tests/mpsc.rs"],
+            ["2013-2014 The Rust Project Developers"],
+            "Apache-2.0 OR MIT",
+            ["Tests adapted from the Rust standard library's std::sync::mpsc."],
+        ),
+        Paragraph(
+            ["examples/matching.rs"],
+            ["Stefan Nilsson"],
+            "CC-BY-3.0",
+            [
+                "Example based on Stefan Nilsson's matching.go",
+                "(http://www.nada.kth.se/~snilsson/concurrency/). Examples are not built",
+                "into the KoeInput binaries.",
+            ],
         ),
     ],
     "bzip2-sys": [
@@ -235,6 +265,12 @@ REPO_LICENSE_FILES = [
               ["1999-2006 Ross Bencina and Phil Burk"], "MIT"),
 ]
 
+# Holders that a crate's license files leave out, added to the ones found there.
+# unicode-ident's only notice is the one of the Unicode data it includes.
+EXTRA_HOLDERS = {
+    "unicode-ident": ["David Tolnay <dtolnay@gmail.com>"],
+}
+
 STUB_COMMENT = [
     "Stub made by cargo-vendor-filterer: the crate's Cargo.toml and an empty",
     f"src/lib.rs. The crate is not built for {PLATFORM}.",
@@ -272,7 +308,9 @@ LICENSE_TEXTS = {
     "BSD-2-Clause": Text("packaging/licenses/hclust-LICENSE", start=r"Redistribution and use"),
     "BSD-3-Clause": Text("packaging/licenses/kissfft-BSD-3-Clause", start=r"Redistribution and use"),
     "bzip2-1.0.6": Text("LICENSE", crate="libbz2-rs-sys", start=r"Redistribution and use",
-                        stop=r"-{20}"),
+                        stop=r"Julian Seward, jseward@"),
+    "CC-BY-3.0": Text("LICENSE-THIRD-PARTY", crate="crossbeam-channel",
+                      start=r"Creative Commons Legal Code", stop=r"={20}"),
     "CDLA-Permissive-2.0": Text("LICENSE", crate="webpki-roots"),
     "FSFAP": Text("xz-5.2/m4/ax_check_capsicum.m4", crate="lzma-sys", prefix=r"#\s*",
                   start=r"Copying and distribution", stop=r"$"),
@@ -566,6 +604,8 @@ def generate():
     crates = {p["name"]: Path(p["manifest_path"]).parent for p in packages}
     for name in BUNDLED:
         crate_dir(crates, name, "BUNDLED")
+    for name in EXTRA_HOLDERS:
+        crate_dir(crates, name, "EXTRA_HOLDERS")
 
     needed = {}
     license_names(parse("MIT OR Apache-2.0"), needed)
@@ -589,6 +629,7 @@ def generate():
         copyright = (crate_notices(directory, skip)
                      or [a.strip() for a in p["authors"] if a.strip()]
                      or [f"{p['name']} contributors"])
+        copyright += [h for h in EXTRA_HOLDERS.get(p["name"], []) if h not in copyright]
         stub = p["id"] not in built_ids
         prefix = f"vendor/{p['name']}-{p['version']}/"
         paragraphs.append(files_paragraph(

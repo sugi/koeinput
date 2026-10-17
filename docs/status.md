@@ -14,9 +14,11 @@ Decisions themselves live in [decisions.md](decisions.md).
 | [superpowers/specs/2026-10-17-overall-design.md](superpowers/specs/2026-10-17-overall-design.md) | Architecture, packaging plan, milestones M0–M5 |
 | [superpowers/specs/2026-10-17-m1-daemon-cli-design.md](superpowers/specs/2026-10-17-m1-daemon-cli-design.md) | M1 spec (daemon and CLI) |
 | [superpowers/plans/2026-10-17-m1-daemon-cli.md](superpowers/plans/2026-10-17-m1-daemon-cli.md) | M1 implementation plan (executed) |
+| [superpowers/specs/2026-10-18-m2-addon-design.md](superpowers/specs/2026-10-18-m2-addon-design.md) | M2 spec (fcitx5 addon) |
+| [superpowers/specs/2026-10-18-m3-debian-packaging-design.md](superpowers/specs/2026-10-18-m3-debian-packaging-design.md) | M3 spec (Debian packaging) |
 | [spike-results.md](spike-results.md) | Model comparison on the user's own recordings (M0) |
-| [development.md](development.md) | How to build, test and run |
-| [followups.md](followups.md) | Review findings deliberately left for M2–M4 |
+| [development.md](development.md) | How to build, test, package and run, and how to install on the host |
+| [followups.md](followups.md) | Review findings deliberately left for later milestones |
 
 ## Where we are
 
@@ -24,8 +26,8 @@ Decisions themselves live in [decisions.md](decisions.md).
 |---|---|
 | M0. Model spike | Done. Default model: parakeet-ja (int8, sherpa-onnx). |
 | M1. Daemon and CLI | Implemented and merged into `main` (merge commit `dc1a3bf`). One check left, see below. |
-| M2. Minimal fcitx5 addon | Implemented on branch `m2-addon` (merge pending). Tests pass in the Debian 13 and Debian 12 images. The host check is pending and is done together with the M3 packages. |
-| M3. Debian packaging | Not started. |
+| M2. Minimal fcitx5 addon | Merged into `main` (merge commit `fe20500`). Tests pass in the Debian 13 and Debian 12 images. The host check is pending; it uses the M3 packages. |
+| M3. Debian packaging | Done on branch `m3-packaging` (merge pending). The packages build, pass lintian and pass the install test for Debian 13 and Debian testing. The host install and the host check are pending for the user, see below. |
 | M4. Quality | Not started. |
 | M5. RPM, PKGBUILD, CI, release | Not started. |
 
@@ -40,6 +42,23 @@ Decisions themselves live in [decisions.md](decisions.md).
   - with the daemon on the host session bus, `status` reports the model as ready;
   - `transcribe` on the user's recordings produced text, with the final result ready at the end of the audio;
   - `listen` works against the test-hooks fake daemon.
+
+### Next for the user: host install and host check
+
+The packages are ready; installing them needs root on the host, so the user does it.
+
+1. Build and test: `scripts/build-deb testing` and `scripts/test-deb testing` in the dev container.
+2. Install on the host, install the model, restart fcitx5: the steps, rollback and logs are in [development.md](development.md#install-on-the-host).
+3. Go through the [host check](development.md#host-check) in WezTerm, Chrome, Firefox, Emacs and Discord. The notes feed M4.
+
+## M3: Debian packaging
+
+Spec: [M3 spec](superpowers/specs/2026-10-18-m3-debian-packaging-design.md). Decisions are in [decisions.md](decisions.md#debian-packages).
+
+- Every build uses the upstream no-TTS sherpa-onnx archive, so no GPL code is in the binaries; the package build checks it.
+- One source package builds `koeinput` and `fcitx5-koeinput` offline, for amd64. Scripts: `scripts/make-orig`, `scripts/build-deb`, `scripts/test-deb`, `scripts/gen-copyright` (see [development.md](development.md#debian-packages)).
+- D-Bus starts the daemon on demand through the systemd user unit; the addon asks for it when fcitx5 loads the addon, and a `Start` waits up to 4 s for a loading model.
+- `scripts/test-deb` installs both packages in fresh Debian 13 and Debian testing containers: files, `koeinput` command, man page, D-Bus activation, the addon in a headless fcitx5 (which starts the daemon), removal and a second install.
 
 ## M2: the minimal fcitx5 addon
 
@@ -80,6 +99,8 @@ Facts already checked for M2 (2026-10-17):
 ### Building
 
 - Rootless podman works inside the dev container. `scripts/dev <command>` runs any command in the Debian 13 build image (`packaging/containers/dev-trixie.Containerfile`, Rust 1.95.0, libpulse-dev, dbus) with the repository at `/src` and `nice -n 10`.
+- The Debian packages build in their own images (`packaging/containers/deb-trixie.Containerfile` and `deb-testing.Containerfile`) through `scripts/build-deb`, and `scripts/test-deb` tests them in fresh `debian:trixie` and `debian:testing` containers.
+- `podman run --init` does not work here (no `catatonit`). `scripts/build-deb` uses tini from its image, and `scripts/test-deb` runs its own PID 1.
 - Binaries built there run directly in the dev container (same glibc).
 - D-Bus tests: `scripts/dev dbus-run-session -- cargo test -p koeinput-daemon --features test-hooks`.
 

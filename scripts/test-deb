@@ -1,0 +1,250 @@
+#!/bin/sh
+# Installs the packages from target/deb/<dist>/ in a fresh debian:<dist> container
+# and checks them: the installed files, the koeinput command and man page, D-Bus
+# activation of the daemon, loading the addon in a headless fcitx5, then removal
+# and a second install. apt needs the network for the dependencies. The output
+# also goes to target/deb/<dist>/test.log.
+# Usage: scripts/test-deb trixie|testing
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+die() {
+  echo "scripts/test-deb: $*" >&2
+  exit 1
+}
+case "${1:-}" in
+  trixie | testing) dist=$1 ;;
+  *)
+    echo "usage: scripts/test-deb trixie|testing" >&2
+    exit 2 ;;
+esac
+
+version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
+[ -n "$version" ] || die "cannot read the version from debian/changelog"
+version=${version#*:}
+upstream=${version%-*}
+out=target/deb/$dist
+for pkg in koeinput fcitx5-koeinput; do
+  [ -e "$out/${pkg}_${version}_amd64.deb" ] ||
+    die "$out/${pkg}_${version}_amd64.deb is missing; run scripts/build-deb $dist first"
+done
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# The test script runs as root in the container ("root") and calls itself as an
+# ordinary user for the checks that do not need root ("user"), and once more
+# inside each private session bus ("status-bus", "fcitx5-bus").
+cat >"$tmp/test.sh" <<'EOF'
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+self=/test/test.sh
+step() { printf '\n=== %s\n' "$*"; }
+ok() { echo "ok: $*"; }
+fail() { echo "FAIL: $*" >&2; exit 1; }
+warn() {
+  echo "WARNING: $*" >&2
+  echo "  $*" >>/tmp/warnings
+}
+# Prints lines from a log with a prefix, so they stand apart in the output.
+show() { sed "s/\x1b\[[0-9;]*m//g; s|^|  $1: |" "$2" 2>/dev/null || true; }
+wait_for() {
+  i=0
+  while ! grep -q "$1" "$2" 2>/dev/null; do
+    [ $i -lt $(($3 * 2)) ] || return 1
+    sleep 0.5
+    i=$((i + 1))
+  done
+}
+
+KOEINPUT_FILES="/usr/bin/koeinput /usr/libexec/koeinput/koeinput-daemon
+  /usr/lib/systemd/user/koeinput.service /usr/share/dbus-1/services/org.nemui.KoeInput.service
+  /usr/share/koeinput/models.toml /usr/share/man/man1/koeinput.1.gz
+  /usr/share/doc/koeinput/copyright"
+ADDON_FILES="/usr/lib/x86_64-linux-gnu/fcitx5/libkoeinput.so /usr/share/fcitx5/addon/koeinput.conf
+  /usr/share/locale/ja/LC_MESSAGES/fcitx5-koeinput.mo /usr/share/doc/fcitx5-koeinput/copyright"
+DEBS="/debs/koeinput_${VERSION}_amd64.deb /debs/fcitx5-koeinput_${VERSION}_amd64.deb"
+
+check_installed() {
+  for f in $KOEINPUT_FILES; do
+    [ -f "$f" ] && [ "$(dpkg -S "$f" | cut -d: -f1)" = koeinput ] || fail "$f is not installed by koeinput"
+  done
+  for f in $ADDON_FILES; do
+    [ -f "$f" ] && [ "$(dpkg -S "$f" | cut -d: -f1)" = fcitx5-koeinput ] ||
+      fail "$f is not installed by fcitx5-koeinput"
+  done
+  [ -x /usr/bin/koeinput ] && [ -x /usr/libexec/koeinput/koeinput-daemon ] || fail "the binaries are not executable"
+}
+
+root_main() {
+  step "install $DEBS"
+  apt-get update -q
+  apt-get install -y -q --no-install-recommends $DEBS
+  # Test tools only, installed after the packages so their own dependencies are tested.
+  apt-get install -y -q --no-install-recommends man-db dbus-bin
+  dpkg-query -W koeinput fcitx5-koeinput fcitx5 dbus-daemon
+
+  step "installed files"
+  check_installed
+  grep -qx 'Exec=/usr/libexec/koeinput/koeinput-daemon' /usr/share/dbus-1/services/org.nemui.KoeInput.service ||
+    fail "the D-Bus service file does not start /usr/libexec/koeinput/koeinput-daemon"
+  dpkg -L koeinput fcitx5-koeinput | while read -r f; do [ ! -f "$f" ] || echo "  $f"; done
+  ok "files in place"
+
+  useradd -m -s /bin/sh tester
+  install -d -o tester -g tester -m 700 /tmp/runtime-tester
+  runuser -u tester -- env -i HOME=/home/tester PATH=/usr/bin:/bin LANG=C.UTF-8 \
+    XDG_RUNTIME_DIR=/tmp/runtime-tester VERSION="$VERSION" UPSTREAM="$UPSTREAM" sh "$self" user
+
+  step "remove"
+  apt-get remove -y -q koeinput fcitx5-koeinput
+  for f in $KOEINPUT_FILES $ADDON_FILES /usr/libexec/koeinput /usr/share/koeinput; do
+    [ ! -e "$f" ] || fail "$f is still there after apt-get remove"
+  done
+  for pkg in koeinput fcitx5-koeinput; do
+    [ "$(dpkg-query -W -f '${db:Status-Abbrev}' "$pkg" 2>/dev/null)" != "ii " ] || fail "$pkg is still installed"
+  done
+  ok "files removed"
+
+  step "install again"
+  apt-get install -y -q --no-install-recommends $DEBS
+  check_installed
+  [ "$(koeinput --version)" = "koeinput $UPSTREAM" ] || fail "koeinput --version after the second install"
+  ok "installed again"
+
+  if [ -e /tmp/warnings ]; then
+    printf '\nPASSED WITH WARNINGS:\n'
+    cat /tmp/warnings
+  else
+    printf '\nPASSED: all checks\n'
+  fi
+}
+
+user_main() {
+  cd "$HOME"
+  step "koeinput command (as user $(id -un))"
+  v=$(koeinput --version)
+  echo "  $v"
+  [ "$v" = "koeinput $UPSTREAM" ] || fail "koeinput --version printed '$v', not 'koeinput $UPSTREAM'"
+  koeinput model list >models.txt
+  show "model list" models.txt
+  grep -q '^parakeet-ja .*not installed, default' models.txt || fail "koeinput model list does not show parakeet-ja"
+  page=$(man -w koeinput)
+  [ "$page" = /usr/share/man/man1/koeinput.1.gz ] || fail "man -w koeinput gave '$page'"
+  MANWIDTH=80 man -P cat koeinput >man.txt 2>man.err || fail "man koeinput failed: $(cat man.err)"
+  [ ! -s man.err ] || fail "man koeinput printed warnings: $(cat man.err)"
+  head -3 man.txt | sed 's|^|  man: |'
+  ok "--version, model list and man page"
+
+  step "D-Bus activation by koeinput status"
+  # No systemd in the container, so the bus starts the daemon through the Exec= line.
+  st=0
+  timeout 30 dbus-run-session -- sh "$self" status-bus 2>status-bus.log || st=$?
+  show status status.txt
+  show bus status-bus.log
+  [ $st -eq 0 ] || fail "koeinput status under dbus-run-session failed (status $st)"
+  grep -qx 'ready: no' status.txt || fail "koeinput status did not report 'ready: no'"
+  grep -qx "version: $UPSTREAM" status.txt || fail "koeinput status did not report version $UPSTREAM"
+  grep -q 'no model installed; run `koeinput model install parakeet-ja`' status-bus.log ||
+    fail "the daemon did not log the install hint"
+  ok "the bus started the daemon; not ready without a model, with the install hint"
+
+  step "fcitx5 loads the addon (headless)"
+  st=0
+  timeout 40 dbus-run-session -- sh "$self" fcitx5-bus 2>fcitx5.log || st=$?
+  grep -i 'koeinput\|error\|fatal\|signal' fcitx5.log | show fcitx5 -
+  alive=$(cat fcitx5-alive 2>/dev/null || echo unknown)
+  stopped=$(cat fcitx5-stopped 2>/dev/null || echo unknown)
+  code=$(cat fcitx5-status 2>/dev/null || echo 0)
+  echo "  fcitx5 running after 5 s: $alive; stopped by: $stopped; exit status: $code; dbus-run-session: $st"
+  if grep -q 'Loaded addon koeinput' fcitx5.log; then
+    [ "$alive" = yes ] || fail "fcitx5 stopped within 5 s of loading the addon (exit status $code)"
+    if [ "$stopped" = exit-request ]; then
+      [ "$code" -eq 0 ] || fail "fcitx5 exited with status $code after loading the addon"
+    else
+      warn "fcitx5 did not exit on fcitx5-remote -e and was killed"
+    fi
+    grep -q "Activating service name='org.nemui.KoeInput' requested by .*comm=\"fcitx5" fcitx5.log ||
+      fail "fcitx5 did not ask the bus to start the daemon"
+    grep -q 'boolean true' activation.txt || fail "the daemon was not running (NameHasOwner: $(cat activation.txt))"
+    ! grep -q 'Cannot start the KoeInput daemon' fcitx5.log || fail "the addon could not start the daemon"
+    grep -q 'no model installed' fcitx5.log || fail "the daemon started by the addon did not report the missing model"
+    ok "addon loaded, and it started the daemon through D-Bus activation"
+  elif grep -v 'Override Enabled Addons' fcitx5.log | grep -q koeinput || [ "$code" -ge 128 ]; then
+    fail "fcitx5 did not finish loading the addon"
+  else
+    warn "fcitx5 could not run headless here, so the addon load was not checked (see the fcitx5 lines above)"
+  fi
+}
+
+# Runs inside dbus-run-session; stderr (with the daemon's log) goes to the caller's file.
+status_bus() {
+  timeout 10 koeinput status >status.txt
+  # The status reply can come before the daemon has looked for the model.
+  wait_for 'no model installed' status-bus.log 10 || true
+}
+
+fcitx5_bus() {
+  # The subshell writes fcitx5's exit status when it ends; "kill -0" cannot tell
+  # a running process from one that has exited but not been waited for.
+  (
+    fcitx5 --disable=all --enable=keyboard,dbus,koeinput --verbose='*=5' &
+    echo $! >fcitx5.pid
+    st=0
+    wait $! || st=$?
+    echo $st >fcitx5-status
+  ) &
+  sleep 5
+  if [ -e fcitx5-status ]; then echo no; else echo yes; fi >fcitx5-alive
+  dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus.NameHasOwner string:org.nemui.KoeInput >activation.txt 2>&1 || true
+  fcitx5-remote -e 2>/dev/null || true
+  i=0
+  while [ ! -e fcitx5-status ] && [ $i -lt 10 ]; do
+    sleep 0.5
+    i=$((i + 1))
+  done
+  if [ -e fcitx5-status ]; then
+    echo exit-request >fcitx5-stopped
+  else
+    echo kill >fcitx5-stopped
+    kill "$(cat fcitx5.pid)" 2>/dev/null || true
+  fi
+  wait
+}
+
+# PID 1 of the container. A shell as PID 1 ignores signals it has no trap for, so
+# this passes them on. timeout ends a test that hangs; it cannot be PID 1 itself
+# (coreutils 9.10 in testing exits with status 125 there).
+pid1() {
+  timeout -k 10 900 sh "$self" root &
+  pid=$!
+  trap 'kill -TERM $pid 2>/dev/null' HUP INT TERM
+  while :; do
+    st=0
+    wait $pid || st=$?
+    kill -0 $pid 2>/dev/null || exit $st
+  done
+}
+
+case "${1:-root}" in
+  pid1) pid1 ;;
+  root) root_main ;;
+  user) user_main ;;
+  status-bus) status_bus ;;
+  fcitx5-bus) fcitx5_bus ;;
+esac
+EOF
+
+# podman run --init would need catatonit on the host, so the script runs its own PID 1.
+{
+  nice -n 10 podman run --rm \
+    -v "$root/$out:/debs:ro" -v "$tmp/test.sh:/test/test.sh:ro" \
+    -e VERSION="$version" -e UPSTREAM="$upstream" \
+    "docker.io/library/debian:$dist" sh /test/test.sh pid1 || echo $? >"$tmp/failed"
+} 2>&1 | tee "$out/test.log"
+if [ -e "$tmp/failed" ]; then
+  die "the install test failed for $dist; see $out/test.log"
+fi

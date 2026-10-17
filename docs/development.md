@@ -132,24 +132,7 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput. 
 
 ### Host check
 
-The host check uses the Debian packages, so do it after they are built. The packaging milestone (M3) adds the steps to build and install them to this file.
-
-Install and start:
-
-```sh
-sudo apt install ./koeinput_0.1.0-1_amd64.deb ./fcitx5-koeinput_0.1.0-1_amd64.deb
-koeinput model install parakeet-ja
-```
-
-Restart fcitx5 so it loads the addon: open System Settings, then Keyboard, then Virtual Keyboard (Plasma 6; on Plasma 5 it is Input Devices, then Virtual Keyboard). Choose None, apply, then choose Fcitx 5 and apply again. The keyboard keeps typing while fcitx5 is down, so a broken addon never locks you out of a terminal.
-
-Rollback:
-
-```sh
-sudo apt remove fcitx5-koeinput koeinput
-```
-
-Then restart fcitx5 the same way.
+The host check uses the Debian packages. Install them first, as described in [Install on the host](#install-on-the-host).
 
 If Right Alt acts as AltGr on your keyboard layout, choose another hotkey in the settings.
 
@@ -169,6 +152,140 @@ For each app (WezTerm, Chrome, Firefox, Emacs, Discord), check:
 12. Switch the input method with its hotkey during a session: note what happens to the status and the session.
 
 For each app, note whether hold mode works and how the partial text looks. These notes feed M4.
+
+Once, in any app: log out and in again, wait about 10 seconds, then dictate. The first dictation works without a "model not ready" notice, because the addon started the daemon when fcitx5 loaded it.
+
+## Debian packages
+
+One source package, `koeinput`, builds two binary packages:
+
+- `koeinput`: the daemon, the `koeinput` command, the systemd user unit, the D-Bus service file, the model catalog and the man page;
+- `fcitx5-koeinput`: the addon.
+
+They are built for Debian 13 (trixie) and Debian testing, for amd64 only. Everything runs in podman containers.
+
+```sh
+scripts/build-deb testing      # or trixie
+scripts/test-deb testing
+```
+
+- `scripts/make-orig` makes the three orig tarballs in `target/deb/` from a clean work tree:
+  - `koeinput_0.1.0.orig.tar.xz`: `git archive` of HEAD, without `debian/`;
+  - `koeinput_0.1.0.orig-vendor.tar.xz`: the crates of `Cargo.lock`, from `cargo vendor-filterer` (crates that x86_64 Linux does not build become empty stubs);
+  - `koeinput_0.1.0.orig-sherpaonnx.tar.bz2`: the pinned sherpa-onnx archive, byte for byte.
+
+  It keeps an existing tarball with the same content and stops at one with different content.
+- `scripts/build-deb trixie|testing` builds the source and binary packages without network in the image from `packaging/containers/deb-<dist>.Containerfile`, then runs lintian. The packages, the source package, `build.log` and `lintian.txt` go to `target/deb/<dist>/`.
+  - It runs `scripts/gen-copyright --check` first, and `scripts/make-orig` when a tarball is missing or out of date.
+  - Files outside `debian/` come from HEAD through the orig tarball, so commit them first. `debian/` comes from the work tree, so you can try packaging changes before you commit them.
+  - The package build runs `cargo test`, the addon's `controller` test and `scripts/check-no-gpl` (before the binaries are stripped).
+  - Rust comes from the distribution. Debian 13 has rustc 1.85 and the workspace needs 1.89, so the trixie image takes Rust from trixie-backports.
+- `scripts/test-deb trixie|testing` installs the two packages in a fresh `debian:<dist>` container. apt downloads the dependencies, so it needs the network. It checks:
+  - the installed files, and which package installs each one;
+  - `koeinput --version`, `koeinput model list` and `man koeinput`;
+  - `koeinput status` under `dbus-run-session`: the bus starts the daemon through the D-Bus service file. With no model installed, the daemon reports `ready: no` and logs the install hint;
+  - fcitx5 without a display (`fcitx5 --disable=all --enable=keyboard,dbus,koeinput`): it loads the addon, and the addon starts the daemon;
+  - `apt-get remove` removes the files, and a second install works.
+
+  The output is also saved in `target/deb/<dist>/test.log`. If fcitx5 cannot run without a display, the script prints a warning and still passes the other checks. The installed binaries are stripped, so the GPL symbol check runs in the package build instead.
+- `scripts/gen-copyright` writes `debian/copyright`. With `--check` it only compares and fails when the file is out of date.
+
+### The main tarball changes with every commit
+
+`git archive` records the commit, so every commit changes `koeinput_0.1.0.orig.tar.xz`. build-deb then runs make-orig, and make-orig stops because the tarball differs. While a version is unpublished (0.1.0 now), delete its tarballs and build again:
+
+```sh
+rm target/deb/koeinput_0.1.0.orig*
+scripts/build-deb testing
+```
+
+make-orig needs a clean work tree, so commit or set aside changes in `debian/` first.
+Once a version is released, keep its tarballs. Any later build then needs a new upstream version, even for a change in `debian/` alone, which normally only raises the Debian revision (see [followups.md](followups.md)).
+
+### New version
+
+1. Raise `version` in `Cargo.toml` and the `koeinput-dbus-api` version in `crates/cli/Cargo.toml` and `crates/daemon/Cargo.toml`. Then update the lock file: `scripts/dev cargo update --workspace`.
+2. Raise `VERSION` in `project()` in `addon/CMakeLists.txt`.
+3. Add an entry at the top of `debian/changelog` (version `X.Y.Z-1`) in the same format as the existing one.
+4. Commit, then run `scripts/build-deb` and `scripts/test-deb` for both distributions.
+
+### New sherpa-onnx pin
+
+After the steps in [sherpa-onnx libraries](#sherpa-onnx-libraries), the package needs these:
+
+1. Fetch the license files of the components again, at the versions that the new sherpa-onnx pins in its `cmake/*.cmake` files, into `packaging/licenses/`. Update `packaging/licenses/README` (file, component, commit, source URL).
+2. Update the `SHERPA` and `REPO_LICENSE_FILES` tables in `scripts/gen-copyright`: versions, components, copyright holders and the Eigen source URLs. Update the ONNX Runtime notices file name in `debian/koeinput.docs`.
+3. Run `scripts/gen-copyright`. It stops with a message when a table names a file or crate that no longer exists.
+4. Build with a new upstream version, because the sherpa-onnx tarball changes.
+5. Check `debian/koeinput.lintian-overrides`. It lists spelling errors inside the prebuilt libraries; lintian reports overrides that are no longer used.
+
+### Crates and debian/copyright
+
+`scripts/gen-copyright` takes the license of each vendored crate from `cargo metadata`, and the copyright lines from the crate's license files. Its tables add what those files miss:
+
+- `EXTRA_HOLDERS`: copyright holders that a crate's license files leave out;
+- `BUNDLED`: files inside a crate under another license, such as bundled C code or tests taken from other projects;
+- `LICENSE_TEXTS`: where each license text comes from.
+
+After a change of `Cargo.lock`, run `scripts/gen-copyright` and read the diff of `debian/copyright`. build-deb fails when a vendored crate has no paragraph. A change of `Cargo.lock` also changes the vendor tarball, so after a release it needs a new upstream version.
+
+## Install on the host
+
+Build and test the packages in the dev container first:
+
+```sh
+scripts/build-deb testing
+scripts/test-deb testing
+```
+
+Then, in a terminal on the host, in the repository directory (`~/works/git/nemui/koeinput`):
+
+1. If you started `koeinput-daemon` by hand in the dev container, stop it (`kill %1` in that shell). While it runs, it holds the D-Bus name and the installed daemon cannot start.
+2. Install the two packages:
+
+   ```sh
+   sudo apt install ./target/deb/testing/koeinput_0.1.0-1_amd64.deb ./target/deb/testing/fcitx5-koeinput_0.1.0-1_amd64.deb
+   ```
+
+   apt may say that the download is performed unsandboxed as root. That is harmless for local files. The `-dbgsym` packages in the same directory hold debug symbols; install them only if you need backtraces.
+3. Install the model once. To use the archive downloaded in the model spike:
+
+   ```sh
+   koeinput model install parakeet-ja --from-file work/models/_dl/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8.tar.bz2
+   ```
+
+   The VAD model is downloaded with it. To download both, run `koeinput model install parakeet-ja` instead.
+4. Restart fcitx5 so that it loads the addon. Open System Settings, then Keyboard, then Virtual Keyboard (Plasma 6; on Plasma 5 it is Input Devices, then Virtual Keyboard). Choose None and apply, then choose Fcitx 5 and apply again. The keyboard keeps typing while fcitx5 is down.
+5. The addon starts the daemon. Check it:
+
+   ```sh
+   koeinput status
+   ```
+
+   It prints `ready: yes` and `model: parakeet-ja`. The model takes a few seconds to load; until then it prints `ready: no`.
+
+Then go through the [host check](#host-check).
+
+### Rollback
+
+```sh
+systemctl --user stop koeinput
+sudo apt remove fcitx5-koeinput koeinput
+```
+
+Then restart fcitx5 as in step 4. Keys still type while fcitx5 is down, so a broken addon never locks you out of a terminal.
+
+The models stay in `~/.local/share/koeinput/models/`. Remove them with `koeinput model remove <id>` before you remove the package, or delete the directory.
+
+### Logs
+
+```sh
+journalctl --user -u koeinput
+```
+
+The daemon logs there when D-Bus starts it through systemd. It never logs recognized text. If a line shows as `[… blob data]`, add `--all`: the daemon's log lines contain color codes (see [followups.md](followups.md)).
+
+The addon's messages are in fcitx5's output. When KWin starts fcitx5, look in the user journal: `journalctl --user -b | grep -i koeinput`.
 
 ## Privacy
 
