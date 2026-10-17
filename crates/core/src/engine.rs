@@ -429,4 +429,43 @@ mod tests {
             .unwrap_or_else(|| panic!("no final: {ev:?}"));
         assert!(n >= 24_000, "final covered only {n} samples");
     }
+
+    #[test]
+    fn vad_factory_failure_reports_model_error() {
+        let mut eng = engine();
+        eng.vad = Arc::new(|| Err("no vad model".to_string()));
+        let h = eng.start(Source::Samples(vec![0.1; 16000]));
+        let ev = collect(&h);
+        assert_eq!(ev.first(), Some(&Event::State(State::Starting)));
+        assert!(
+            ev.iter().any(|e| matches!(
+                e,
+                Event::Error { code, message } if code == "model" && message == "no vad model"
+            )),
+            "{ev:?}"
+        );
+        assert_eq!(ev.last(), Some(&Event::State(State::Error)));
+        assert!(!ev.iter().any(|e| matches!(e, Event::Final(_))));
+    }
+
+    #[test]
+    fn no_audio_for_two_seconds_reports_audio_error() {
+        let started = std::time::Instant::now();
+        let h = engine().start(Source::StallingGenerator {
+            level: 0.1,
+            chunks: 5,
+        });
+        let ev = collect(&h);
+        let elapsed = started.elapsed();
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Error { code, .. } if code == "audio")),
+            "{ev:?}"
+        );
+        assert_eq!(ev.last(), Some(&Event::State(State::Error)), "{ev:?}");
+        assert!(
+            elapsed >= Duration::from_millis(1900) && elapsed < Duration::from_secs(4),
+            "{elapsed:?}"
+        );
+    }
 }

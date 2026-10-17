@@ -15,7 +15,6 @@ Each item names the milestone it belongs to.
   - Silero's 20 s maximum speech length splits long monologues mid-word.
   - Fillers are also removed inside longer words; judge this with real transcripts.
 - Config (`crates/core/src/config.rs`):
-- Session and engine tests: recognizer errors during finalize and on a partial tick, `max_length` reached during the tail, `SessionConfig::from_config`, VAD factory failure, and the 2 s no-audio timeout.
 - CLI:
   - `koeinput transcribe` stops the whole batch at the first bad file.
   - `koeinput listen` early returns on errors skip the explicit cancel (the daemon still cancels when the client leaves).
@@ -29,6 +28,7 @@ Each item names the milestone it belongs to.
 
 ### 2026-10-18
 
+- Session and engine tests: recognizer errors during finalize and on a partial tick, `max_length` reached during the tail, `SessionConfig::from_config`, VAD factory failure, and the 2 s no-audio timeout.
 - Validate the model catalog when it is loaded: each `id` and `archive_root` must be a single plain path component, `files` values must be relative paths without `..`, `format` must be `file` or `tar.bz2`, and `sha256` must be 64 hex characters. Before this, an empty `id` made `koeinput model remove` delete the whole models directory. (M3)
 - Model download (`crates/core/src/models.rs`) (M4):
   - Cap the download at the catalog size (the ureq reader is unlimited).
