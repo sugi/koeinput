@@ -51,7 +51,7 @@ Binaries built from it could only be shipped under GPL terms, with an offer of c
 - `scripts/sherpa-onnx` downloads the archive once into `work/cache/sherpa-onnx/`, checks size and SHA-256, extracts it, adds the stubs, and prints the `lib/` path. It accepts an existing local file (`--from-file`) for offline machines.
 - `scripts/dev` sets `SHERPA_ONNX_LIB_DIR=/src/work/cache/sherpa-onnx/<stem>/lib` for every container run, after running `scripts/sherpa-onnx` if the directory is missing.
   `target/sherpa-onnx-prebuilt/` is no longer used.
-- `scripts/check-no-gpl` runs the symbol check on given binaries; the package build and the install test both call it.
+- `scripts/check-no-gpl` runs the symbol check on given unstripped binaries (it refuses stripped ones, where it could prove nothing); the package build calls it before `dh_strip`.
 
 ## 3. Daemon start through D-Bus activation
 
@@ -126,7 +126,7 @@ Lintian on the source package takes over 20 minutes with the vendor tree; it run
 `scripts/test-deb [trixie|testing]` runs in a fresh container (root inside rootless podman):
 
 1. `apt-get install` both `.deb` files from `target/deb/<dist>/`.
-2. The files are where section 4 says, `koeinput --version` and `koeinput model list` work, `man koeinput` exists, and `scripts/check-no-gpl` passes on the installed binaries.
+2. The files are where section 4 says, `koeinput --version` and `koeinput model list` work, and `man koeinput` exists. The installed binaries are stripped, so the GPL symbol check runs in the package build, before `dh_strip`.
 3. Under `dbus-run-session` (no systemd, so the bus uses the `Exec=` line), `koeinput status` activates the daemon, which reports `ready: no` with the install hint (no model installed).
 4. fcitx5 loads the addon headless: `fcitx5 --disable=all --enable=keyboard,dbus,koeinput` under `dbus-run-session` logs that `koeinput` was loaded, and exits on `fcitx5-remote -e` or after a timeout.
 5. `apt-get remove` both packages: the installed files are gone; installing again works.
