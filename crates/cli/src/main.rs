@@ -54,10 +54,13 @@ enum ModelCmd {
         /// Model id.
         id: String,
     },
-    /// Make an installed model the default.
+    /// Make an installed model the default, or with --final the final-stage model.
     Use {
-        /// Model id.
+        /// Model id; with --final, `none` turns the final-stage model off.
         id: String,
+        /// Set the model that decodes the final text; partial text keeps using the default model.
+        #[arg(long = "final")]
+        final_stage: bool,
     },
 }
 
@@ -81,7 +84,13 @@ fn main() -> std::process::ExitCode {
                 model_cmd::install(&paths, &id, from_file.as_deref())
             }
             ModelCmd::Remove { id } => model_cmd::remove(&paths, &id),
-            ModelCmd::Use { id } => model_cmd::use_model(&paths, &id),
+            ModelCmd::Use { id, final_stage } => {
+                if final_stage {
+                    model_cmd::use_final(&paths, &id)
+                } else {
+                    model_cmd::use_model(&paths, &id)
+                }
+            }
         },
     };
     match result {
@@ -115,6 +124,9 @@ Remove an installed model.
 .TP
 \fBmodel use\fR \fIID\fR
 Make an installed model the default.
+.TP
+\fBmodel use\fR \fIID\fR \fB\-\-final\fR
+Use a second model for the final text, while the default model keeps producing the partial text. \fBmodel use \-\-final none\fR turns it off.
 .SH NOTES
 Recognition runs locally; no audio leaves the machine. The daemon is started on demand through D\-Bus.
 .SH FILES

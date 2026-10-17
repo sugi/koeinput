@@ -24,9 +24,27 @@ pub fn status() -> Result<()> {
         let ready = p.ready().await.context(NOT_RUNNING)?;
         println!("ready: {}", if ready { "yes" } else { "no" });
         println!("model: {}", p.model().await?);
+        // A daemon started before an upgrade lacks these properties; it has no final-stage model.
+        let final_model = p.final_model().await.unwrap_or_default();
+        let final_ready = p.final_model_ready().await.unwrap_or(false);
+        if let Some(line) = final_model_line(&final_model, final_ready) {
+            println!("{line}");
+        }
         println!("version: {}", p.version().await?);
         Ok(())
     })
+}
+
+fn final_model_line(id: &str, ready: bool) -> Option<String> {
+    if id.is_empty() {
+        return None;
+    }
+    let state = if ready {
+        "ready"
+    } else {
+        "not loaded, see journalctl --user -u koeinput"
+    };
+    Some(format!("final model: {id} ({state})"))
 }
 
 pub fn run() -> Result<()> {
@@ -129,4 +147,23 @@ async fn listen() -> Result<()> {
         let _ = p.cancel(id).await;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn final_model_line_shows_state_or_nothing() {
+        assert_eq!(final_model_line("", false), None);
+        assert_eq!(final_model_line("", true), None);
+        assert_eq!(
+            final_model_line("cohere-transcribe", true).as_deref(),
+            Some("final model: cohere-transcribe (ready)")
+        );
+        assert_eq!(
+            final_model_line("cohere-transcribe", false).as_deref(),
+            Some("final model: cohere-transcribe (not loaded, see journalctl --user -u koeinput)")
+        );
+    }
 }

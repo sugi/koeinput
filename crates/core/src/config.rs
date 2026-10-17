@@ -12,6 +12,8 @@ pub struct Config {
     pub min_length_ms: u64,
     pub max_length_ms: u64,
     pub final_full_max_ms: u64,
+    /// Catalog id of the model that decodes the final text; empty in the file means none.
+    pub final_model: Option<String>,
     pub dictionary: Option<PathBuf>,
 }
 
@@ -26,6 +28,7 @@ impl Default for Config {
             min_length_ms: 500,
             max_length_ms: 120_000,
             final_full_max_ms: 30_000,
+            final_model: None,
             dictionary: None,
         }
     }
@@ -42,9 +45,10 @@ pub enum ConfigError {
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
-            let cfg: Config =
+            let mut cfg: Config =
                 toml::from_str(&text).map_err(|e| ConfigError::Parse(e.to_string()))?;
             cfg.validate()?;
+            cfg.final_model = cfg.final_model.filter(|id| !id.is_empty());
             Ok(cfg)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
@@ -86,6 +90,15 @@ impl Config {
 }
 
 pub fn set_model(path: &Path, model_id: &str) -> Result<(), ConfigError> {
+    set_value(path, "model", model_id)
+}
+
+/// `None` writes an empty `final_model`, which keeps a comment above the key.
+pub fn set_final_model(path: &Path, model_id: Option<&str>) -> Result<(), ConfigError> {
+    set_value(path, "final_model", model_id.unwrap_or(""))
+}
+
+fn set_value(path: &Path, key: &str, value: &str) -> Result<(), ConfigError> {
     // Renaming over a symlink would replace it with a regular file.
     let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let text = match std::fs::read_to_string(path) {
@@ -96,7 +109,7 @@ pub fn set_model(path: &Path, model_id: &str) -> Result<(), ConfigError> {
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|e: toml_edit::TomlError| ConfigError::Parse(e.to_string()))?;
-    doc["model"] = toml_edit::value(model_id);
+    doc[key] = toml_edit::value(value);
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = parent.unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
@@ -194,6 +207,48 @@ mod tests {
         assert!(text.contains("# mine"));
         assert!(text.contains("threads = 4"));
         assert_eq!(load(&p).unwrap().model.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn final_model_is_none_by_default_and_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.toml");
+        assert_eq!(Config::default().final_model, None);
+        std::fs::write(&p, "final_model = \"\"\n").unwrap();
+        assert_eq!(load(&p).unwrap().final_model, None);
+        std::fs::write(&p, "final_model = \"cohere-transcribe\"\n").unwrap();
+        assert_eq!(
+            load(&p).unwrap().final_model.as_deref(),
+            Some("cohere-transcribe")
+        );
+    }
+
+    #[test]
+    fn set_final_model_sets_and_clears_keeping_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("sub/c.toml");
+        set_final_model(&p, Some("cohere-transcribe")).unwrap();
+        assert_eq!(
+            load(&p).unwrap().final_model.as_deref(),
+            Some("cohere-transcribe")
+        );
+        std::fs::write(
+            &p,
+            "# mine\nmodel = \"a\"\n# second stage\nfinal_model = \"b\"\n",
+        )
+        .unwrap();
+        set_final_model(&p, None).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(text.contains("# mine"), "{text}");
+        assert!(text.contains("# second stage"), "{text}");
+        let cfg = load(&p).unwrap();
+        assert_eq!(cfg.final_model, None);
+        assert_eq!(cfg.model.as_deref(), Some("a"));
+        let names: Vec<_> = std::fs::read_dir(p.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("c.toml")]);
     }
 
     #[test]

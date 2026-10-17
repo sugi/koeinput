@@ -32,6 +32,7 @@ pub type VadFactory = Arc<dyn Fn() -> Result<Box<dyn Vad>, String> + Send + Sync
 pub struct Engine {
     pub cfg: SessionConfig,
     pub rec: Arc<dyn Recognizer>,
+    pub final_rec: Option<Arc<dyn Recognizer>>,
     pub vad: VadFactory,
     pub post: Arc<PostProcessor>,
 }
@@ -57,6 +58,14 @@ impl SessionHandle {
 }
 
 impl Engine {
+    pub fn session(&self) -> Result<Session, String> {
+        let vad = (self.vad)()?;
+        Ok(
+            Session::new(self.cfg, self.rec.clone(), vad, self.post.clone())
+                .with_final_recognizer(self.final_rec.clone()),
+        )
+    }
+
     pub fn start(&self, source: Source) -> SessionHandle {
         let (ev_tx, ev_rx) = unbounded();
         let (cmd_tx, cmd_rx) = unbounded();
@@ -78,11 +87,10 @@ impl Engine {
             }
         };
         send(vec![Event::State(State::Starting)]);
-        let vad = match (self.vad)() {
-            Ok(v) => v,
+        let mut session = match self.session() {
+            Ok(s) => s,
             Err(m) => return send(fail("model", m)),
         };
-        let mut session = Session::new(self.cfg, self.rec.clone(), vad, self.post.clone());
         let samples = match source {
             Source::Samples(s) => s,
             Source::File(p) => match crate::audio::file::read_wav_16k_mono(&p) {
@@ -306,6 +314,7 @@ mod tests {
                 final_full_max: 480_000,
             },
             rec: Arc::new(FakeRecognizer::new(|s| Ok(format!("{}", s.len() / 16000)))),
+            final_rec: None,
             vad: Arc::new(|| Ok(Box::new(FakeVad::always_speech()) as Box<dyn Vad>)),
             post: Arc::new(PostProcessor::empty()),
         }
@@ -335,6 +344,26 @@ mod tests {
         assert!(ev.iter().any(|e| matches!(e, Event::Partial(_))));
         assert!(ev.contains(&Event::Final("3".into())), "{ev:?}");
         assert_eq!(ev.last(), Some(&Event::State(State::Done)));
+    }
+
+    #[test]
+    fn final_recognizer_gives_the_final_text_and_the_main_one_partials() {
+        let mut eng = engine();
+        let f = Arc::new(FakeRecognizer::new(|s| Ok(format!("F{}", s.len() / 16000))));
+        eng.final_rec = Some(f.clone());
+        let ev = collect(&eng.start(Source::Samples(vec![0.1; 3 * 16000])));
+        assert!(ev.contains(&Event::Final("F3".into())), "{ev:?}");
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, Event::Partial(t) if !t.starts_with('F'))),
+            "{ev:?}"
+        );
+        assert!(
+            !ev.iter()
+                .any(|e| matches!(e, Event::Partial(t) if t.starts_with('F'))),
+            "{ev:?}"
+        );
+        assert_eq!(f.calls(), 1);
     }
 
     #[test]
@@ -415,6 +444,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(300));
                 Ok(s.len().to_string())
             })),
+            final_rec: None,
             vad: Arc::new(|| Ok(Box::new(FakeVad::always_speech()) as Box<dyn Vad>)),
             post: Arc::new(PostProcessor::empty()),
         };

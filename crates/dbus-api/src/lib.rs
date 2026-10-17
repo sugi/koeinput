@@ -22,6 +22,10 @@ pub trait Recognizer1 {
     #[zbus(property)]
     fn model(&self) -> zbus::Result<String>;
     #[zbus(property)]
+    fn final_model(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn final_model_ready(&self) -> zbus::Result<bool>;
+    #[zbus(property)]
     fn version(&self) -> zbus::Result<String>;
 
     #[zbus(signal)]

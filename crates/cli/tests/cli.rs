@@ -48,6 +48,64 @@ fn model_use_writes_config() {
 }
 
 #[test]
+fn model_use_final_sets_and_clears_the_final_stage_model() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    let run = |args: &[&str]| koeinput(home.path()).args(args).output().unwrap();
+    let out = run(&["model", "use", "parakeet-ja"]);
+    assert!(out.status.success());
+
+    let out = run(&["model", "use", "cohere-transcribe", "--final"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("koeinput model install cohere-transcribe"),
+        "{stdout}"
+    );
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(cfg.contains("final_model = \"cohere-transcribe\""), "{cfg}");
+    assert!(cfg.contains("model = \"parakeet-ja\""), "{cfg}");
+
+    let out = run(&["model", "list"]);
+    let list = String::from_utf8(out.stdout).unwrap();
+    let marked: Vec<_> = list.lines().filter(|l| l.contains("final model")).collect();
+    assert_eq!(marked.len(), 1, "{list}");
+    assert!(marked[0].starts_with("cohere-transcribe "), "{list}");
+
+    let out = run(&["model", "use", "--final", "none"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!cfg.contains("cohere-transcribe"), "{cfg}");
+    assert!(cfg.contains("model = \"parakeet-ja\""), "{cfg}");
+    let out = run(&["model", "list"]);
+    assert!(
+        !String::from_utf8(out.stdout)
+            .unwrap()
+            .contains("final model")
+    );
+
+    for args in [
+        &["model", "use", "none"][..],
+        &["model", "use", "silero-vad", "--final"],
+        &["model", "use", "nope", "--final"],
+        &["model", "use", "--final"],
+    ] {
+        let out = run(args);
+        assert!(!out.status.success(), "{args:?} succeeded");
+    }
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!cfg.contains("final_model = \"silero-vad\""), "{cfg}");
+}
+
+#[test]
 fn transcribe_without_model_explains_how_to_install() {
     let home = tempfile::tempdir().unwrap();
     let out = koeinput(home.path())
@@ -91,6 +149,7 @@ fn manpage_is_hidden_roff_that_documents_the_commands() {
     let plain = text.replace('\\', "");
     assert!(plain.contains("--from-file"));
     assert!(plain.contains("--partials"));
+    assert!(plain.contains("--final"));
     assert!(!plain.contains("manpage"));
     for sub in ["listen", "status", "transcribe", "model", "help"] {
         assert!(!plain.contains(&format!("koeinput-{sub}(1)")), "{sub}");

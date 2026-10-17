@@ -36,6 +36,9 @@ pub struct Shared {
     pub current: Option<Current>,
     pub next_id: u32,
     pub model: String,
+    /// The configured final-stage model id, empty when none.
+    pub final_model: String,
+    pub final_ready: bool,
     pub source: Option<String>,
     pub test_source: bool,
     pub load_finished: tokio::sync::watch::Sender<bool>,
@@ -135,6 +138,16 @@ impl Recognizer1 {
     #[zbus(property)]
     async fn model(&self) -> String {
         self.shared.lock().unwrap().model.clone()
+    }
+
+    #[zbus(property)]
+    async fn final_model(&self) -> String {
+        self.shared.lock().unwrap().final_model.clone()
+    }
+
+    #[zbus(property)]
+    async fn final_model_ready(&self) -> bool {
+        self.shared.lock().unwrap().final_ready
     }
 
     #[zbus(property)]

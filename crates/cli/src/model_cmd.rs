@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use koeinput_core::config::{Paths, set_model};
+use koeinput_core::config::{Config, Paths, load, set_final_model, set_model};
 use koeinput_core::models::{
     Catalog, InstallSource, ModelEntry, VAD_MODEL_ID, install as install_model,
     remove as remove_model,
@@ -20,8 +20,13 @@ fn entry<'a>(c: &'a Catalog, id: &str) -> Result<&'a ModelEntry> {
         .with_context(|| format!("unknown model {id}; see `koeinput model list`"))
 }
 
+fn config(paths: &Paths) -> Result<Config> {
+    load(&paths.config_file).with_context(|| format!("reading {}", paths.config_file.display()))
+}
+
 pub fn list(paths: &Paths) -> Result<()> {
     let c = catalog(paths)?;
+    let final_model = config(paths)?.final_model;
     for m in &c.models {
         let state = if m.is_installed(&paths.models_dir) {
             "installed"
@@ -29,12 +34,18 @@ pub fn list(paths: &Paths) -> Result<()> {
             "not installed"
         };
         let default = if m.default { ", default" } else { "" };
+        let is_final = if final_model.as_deref() == Some(m.id.as_str()) {
+            ", final model"
+        } else {
+            ""
+        };
         println!(
-            "{:<20} {:>10}  {}{}  {} [{}]",
+            "{:<20} {:>10}  {}{}{}  {} [{}]",
             m.id,
             mib(m.size),
             state,
             default,
+            is_final,
             m.name,
             m.license
         );
@@ -81,14 +92,37 @@ pub fn remove(paths: &Paths, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn use_model(paths: &Paths, id: &str) -> Result<()> {
-    let c = catalog(paths)?;
-    let m = entry(&c, id)?;
+const RESTART: &str = "restart the daemon to use it (systemctl --user restart koeinput)";
+
+fn recognizer<'a>(c: &'a Catalog, id: &str) -> Result<&'a ModelEntry> {
+    let m = entry(c, id)?;
     if m.kind == "vad" {
         bail!("{id} is a VAD model, not a recognizer");
     }
+    Ok(m)
+}
+
+pub fn use_model(paths: &Paths, id: &str) -> Result<()> {
+    let c = catalog(paths)?;
+    recognizer(&c, id)?;
     set_model(&paths.config_file, id)?;
-    println!("model set to {id}; restart the daemon to use it (systemctl --user restart koeinput)");
+    println!("model set to {id}; {RESTART}");
+    Ok(())
+}
+
+pub fn use_final(paths: &Paths, id: &str) -> Result<()> {
+    if id == "none" {
+        set_final_model(&paths.config_file, None)?;
+        println!("final model turned off; {RESTART}");
+        return Ok(());
+    }
+    let c = catalog(paths)?;
+    let m = recognizer(&c, id)?;
+    set_final_model(&paths.config_file, Some(id))?;
+    println!("final model set to {id}; {RESTART}");
+    if !m.is_installed(&paths.models_dir) {
+        println!("{id} is not installed yet; install it with `koeinput model install {id}`");
+    }
     Ok(())
 }
 

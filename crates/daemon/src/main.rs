@@ -2,10 +2,11 @@ mod service;
 
 use anyhow::Context;
 use futures_util::StreamExt;
-use koeinput_core::build::{BuildError, load_engine};
+use koeinput_core::build::{BuildError, load_final, load_main};
 use koeinput_core::config::{Config, Paths, load};
 use koeinput_core::engine::Engine;
 use koeinput_core::models::DEFAULT_MODEL_ID;
+use koeinput_core::recognizer::Recognizer;
 use koeinput_dbus_api::{BUS_NAME, OBJECT_PATH};
 use service::{Readiness, Recognizer1, Shared};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,8 @@ async fn main() -> anyhow::Result<()> {
             .model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string()),
+        final_model: cfg.final_model.clone().unwrap_or_default(),
+        final_ready: false,
         source: cfg.source.clone(),
         test_source: test_fake,
         load_finished: tokio::sync::watch::channel(false).0,
@@ -89,8 +92,9 @@ async fn load_model(
     shared: Arc<Mutex<Shared>>,
     iface: InterfaceRef<Recognizer1>,
 ) {
-    let r = tokio::task::spawn_blocking(move || load_for(&paths, &cfg, test_fake)).await;
-    {
+    let (p, c) = (paths.clone(), cfg.clone());
+    let r = tokio::task::spawn_blocking(move || load_for(&p, &c, test_fake)).await;
+    let ready = {
         let mut s = shared.lock().unwrap();
         match r {
             Ok(Ok((engine, id))) => {
@@ -112,18 +116,61 @@ async fn load_model(
             }
         }
         s.load_finished.send_replace(true);
-    }
+        matches!(s.readiness, Readiness::Ready(_))
+    };
     // Proxies cache properties, so clients only see the new values through PropertiesChanged.
     // Model goes first so that a client reacting to Ready already has the right Model.
-    let i = iface.get().await;
-    let emitter = iface.signal_emitter();
-    for r in [
-        i.model_changed(emitter).await,
-        i.ready_changed(emitter).await,
-    ] {
-        if let Err(e) = r {
-            tracing::warn!("announcing property change: {e}");
+    // The interface guard is dropped here, before the final-stage load that may take several seconds.
+    {
+        let i = iface.get().await;
+        let emitter = iface.signal_emitter();
+        for r in [
+            i.model_changed(emitter).await,
+            i.ready_changed(emitter).await,
+        ] {
+            if let Err(e) = r {
+                tracing::warn!("announcing property change: {e}");
+            }
         }
+    }
+    let Some(id) = cfg.final_model.clone().filter(|_| ready) else {
+        return;
+    };
+    // Loaded only after the main model, so dictation can start while this large model loads.
+    tracing::info!(model = %id, "loading the final-stage model");
+    let r = tokio::task::spawn_blocking(move || load_final_for(&paths, &cfg, test_fake)).await;
+    let rec = match r {
+        Ok(Ok(Some(rec))) => rec,
+        Ok(Ok(None)) => return,
+        Ok(Err(e)) => {
+            tracing::error!(model = %id, "final-stage model: {e}; using the main model only");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(model = %id, "final-stage model loading failed: {e}; using the main model only");
+            return;
+        }
+    };
+    {
+        let mut s = shared.lock().unwrap();
+        let Readiness::Ready(engine) = &s.readiness else {
+            return;
+        };
+        let engine = Engine {
+            final_rec: Some(rec),
+            ..Engine::clone(engine)
+        };
+        s.readiness = Readiness::Ready(Arc::new(engine));
+        s.final_ready = true;
+        tracing::info!(model = %id, "final-stage model loaded");
+    }
+    if let Err(e) = iface
+        .get()
+        .await
+        .final_model_ready_changed(iface.signal_emitter())
+        .await
+    {
+        tracing::warn!("announcing property change: {e}");
     }
 }
 
@@ -151,6 +198,7 @@ fn load_for(paths: &Paths, cfg: &Config, test_fake: bool) -> Result<(Engine, Str
         let engine = Engine {
             cfg: koeinput_core::session::SessionConfig::from_config(cfg),
             rec: Arc::new(rec),
+            final_rec: None,
             vad: Arc::new(|| {
                 Ok(Box::new(FakeVad::always_speech()) as Box<dyn koeinput_core::vad::Vad>)
             }),
@@ -159,5 +207,29 @@ fn load_for(paths: &Paths, cfg: &Config, test_fake: bool) -> Result<(Engine, Str
         return Ok((engine, "fake".into()));
     }
     let _ = test_fake;
-    load_engine(paths, cfg)
+    load_main(paths, cfg)
+}
+
+fn load_final_for(
+    paths: &Paths,
+    cfg: &Config,
+    test_fake: bool,
+) -> Result<Option<Arc<dyn Recognizer>>, BuildError> {
+    #[cfg(feature = "test-hooks")]
+    if test_fake {
+        if let Some(d) = service::test_delay("KOEINPUT_TEST_FINAL_LOAD_DELAY_MS") {
+            std::thread::sleep(d);
+        }
+        if std::env::var("KOEINPUT_TEST_FINAL_LOAD_FAIL").as_deref() == Ok("1") {
+            return Err(BuildError::Load("test final-stage load failure".into()));
+        }
+        if std::env::var("KOEINPUT_TEST_FINAL_FAKE").as_deref() == Ok("1") {
+            let rec = koeinput_core::testing::FakeRecognizer::new(|s| {
+                Ok(format!("F{}", s.len() / 16000))
+            });
+            return Ok(Some(Arc::new(rec)));
+        }
+    }
+    let _ = test_fake;
+    load_final(paths, cfg)
 }

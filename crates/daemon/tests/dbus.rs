@@ -31,12 +31,17 @@ impl Drop for Daemon {
 }
 
 /// Config, data and stderr of the daemon go to a fresh directory, away from the developer's own files.
-fn daemon_command(extra: &[(&str, &str)]) -> (Command, PathBuf) {
+fn daemon_command(extra: &[(&str, &str)], config: &str) -> (Command, PathBuf) {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
     let dir =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("dbus-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    if !config.is_empty() {
+        let cfg_dir = dir.join("config/koeinput");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config.toml"), config).unwrap();
+    }
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_koeinput-daemon"));
     cmd.env("HOME", &dir)
         .env("XDG_CONFIG_HOME", dir.join("config"))
@@ -51,6 +56,13 @@ fn daemon_command(extra: &[(&str, &str)]) -> (Command, PathBuf) {
 }
 
 async fn start_daemon(extra: &[(&str, &str)]) -> (Daemon, zbus::Connection) {
+    start_daemon_with_config(extra, "").await
+}
+
+async fn start_daemon_with_config(
+    extra: &[(&str, &str)],
+    config: &str,
+) -> (Daemon, zbus::Connection) {
     let turn = BUS_TURN.lock().await;
     let conn = zbus::Connection::session().await.unwrap();
     let dbus = zbus::fdo::DBusProxy::new(&conn).await.unwrap();
@@ -64,7 +76,7 @@ async fn start_daemon(extra: &[(&str, &str)]) -> (Daemon, zbus::Connection) {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let (mut cmd, dir) = daemon_command(extra);
+    let (mut cmd, dir) = daemon_command(extra, config);
     let child = Daemon {
         child: cmd.spawn().unwrap(),
         dir,
@@ -235,7 +247,7 @@ async fn worker_panic_ends_session_with_error_and_frees_the_daemon() {
 #[tokio::test(flavor = "multi_thread")]
 async fn second_daemon_does_not_take_over_the_name() {
     let (d, conn) = start_daemon(&[]).await;
-    let (mut cmd, dir) = daemon_command(&[]);
+    let (mut cmd, dir) = daemon_command(&[], "");
     let mut second = cmd.spawn().unwrap();
     let mut status = None;
     for _ in 0..100 {
@@ -270,6 +282,101 @@ async fn ready_and_model_changes_reach_an_existing_proxy() {
     assert_eq!(p.model().await.unwrap(), "parakeet-ja");
     wait_ready(&p).await;
     assert_eq!(p.model().await.unwrap(), "fake");
+    assert_eq!(p.final_model().await.unwrap(), "");
+    assert!(!p.final_model_ready().await.unwrap());
+}
+
+const FINAL_CONFIG: &str = "final_model = \"cohere-transcribe\"\n";
+
+async fn wait_final_ready(p: &Recognizer1Proxy<'_>) {
+    for _ in 0..100 {
+        if p.final_model_ready().await.unwrap() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("final-stage model not ready");
+}
+
+/// Records for about a second and returns the session's partial texts and its final text.
+async fn dictate(p: &Recognizer1Proxy<'_>) -> (Vec<String>, String) {
+    let mut partials = p.receive_partial().await.unwrap();
+    let mut finals = p.receive_final_text().await.unwrap();
+    let id = p.start(HashMap::new()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    p.stop(id).await.unwrap();
+    let f = timeout(Duration::from_secs(5), finals.next())
+        .await
+        .expect("no Final")
+        .unwrap();
+    let a = f.args().unwrap();
+    assert_eq!(a.session, id);
+    let mut texts = Vec::new();
+    while let Ok(Some(s)) = timeout(Duration::from_millis(200), partials.next()).await {
+        let a = s.args().unwrap();
+        if a.session == id {
+            texts.push(a.text.clone());
+        }
+    }
+    (texts, a.text.clone())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_text_comes_from_the_final_stage_model() {
+    let (_d, conn) =
+        start_daemon_with_config(&[("KOEINPUT_TEST_FINAL_FAKE", "1")], FINAL_CONFIG).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert_eq!(p.final_model().await.unwrap(), "cohere-transcribe");
+    wait_final_ready(&p).await;
+    assert!(p.ready().await.unwrap());
+    let (partials, text) = dictate(&p).await;
+    assert!(text.starts_with('F') && text.len() > 1, "{text}");
+    assert!(!partials.is_empty());
+    assert!(partials.iter().all(|t| !t.starts_with('F')), "{partials:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_stage_model_loads_after_the_main_model() {
+    let (_d, conn) = start_daemon_with_config(
+        &[
+            ("KOEINPUT_TEST_FINAL_FAKE", "1"),
+            ("KOEINPUT_TEST_FINAL_LOAD_DELAY_MS", "3000"),
+        ],
+        FINAL_CONFIG,
+    )
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    assert!(!p.final_model_ready().await.unwrap());
+    let (_, text) = dictate(&p).await;
+    assert!(!text.is_empty() && !text.starts_with('F'), "{text}");
+    wait_final_ready(&p).await;
+    let (_, text) = dictate(&p).await;
+    assert!(text.starts_with('F'), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_model_load_failure_keeps_main_model() {
+    let (d, conn) =
+        start_daemon_with_config(&[("KOEINPUT_TEST_FINAL_LOAD_FAIL", "1")], FINAL_CONFIG).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    let log_path = d.dir.join("stderr.log");
+    let mut log = String::new();
+    for _ in 0..100 {
+        log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if log.contains("test final-stage load failure") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(log.contains("test final-stage load failure"), "{log}");
+    assert!(log.contains("cohere-transcribe"), "{log}");
+    assert!(p.ready().await.unwrap());
+    assert!(!p.final_model_ready().await.unwrap());
+    assert_eq!(p.final_model().await.unwrap(), "cohere-transcribe");
+    let (_, text) = dictate(&p).await;
+    assert!(!text.is_empty() && !text.starts_with('F'), "{text}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

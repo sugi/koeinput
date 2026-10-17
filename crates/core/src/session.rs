@@ -64,6 +64,7 @@ impl SessionConfig {
 pub struct Session {
     cfg: SessionConfig,
     rec: Arc<dyn Recognizer>,
+    final_rec: Option<Arc<dyn Recognizer>>,
     vad: Box<dyn Vad>,
     post: Arc<PostProcessor>,
     audio: Vec<f32>,
@@ -86,6 +87,7 @@ impl Session {
         Self {
             cfg,
             rec,
+            final_rec: None,
             vad,
             post,
             audio: Vec::new(),
@@ -97,6 +99,12 @@ impl Session {
             len_at_stop: None,
             state: State::Starting,
         }
+    }
+
+    /// Decodes the whole-utterance final text; partials and the segment-join fallback keep using the main recognizer.
+    pub fn with_final_recognizer(mut self, rec: Option<Arc<dyn Recognizer>>) -> Self {
+        self.final_rec = rec;
+        self
     }
 
     pub fn state(&self) -> State {
@@ -230,7 +238,8 @@ impl Session {
             self.first_speech.get_or_insert(seg.start);
         }
         if let Some(span) = self.whole_utterance() {
-            return self.decode(span);
+            let rec = self.final_rec.as_deref().unwrap_or(&*self.rec);
+            return self.decode_span(rec, span);
         }
         for seg in rest {
             let t = self.decode(seg)?;
@@ -668,6 +677,13 @@ mod tests {
     }
 
     fn span_rec(fail: fn(usize, usize) -> bool) -> (Arc<FakeRecognizer>, Spans) {
+        tagged_span_rec("", fail)
+    }
+
+    fn tagged_span_rec(
+        tag: &'static str,
+        fail: fn(usize, usize) -> bool,
+    ) -> (Arc<FakeRecognizer>, Spans) {
         let spans = Spans::default();
         let log = spans.clone();
         let r = FakeRecognizer::new(move |s| {
@@ -680,7 +696,7 @@ mod tests {
                 return Err(RecognizerError::Decode("boom".into()));
             }
             // The filler is removed by post-processing, so the results show it ran.
-            Ok(format!("えー[{a}-{b}]"))
+            Ok(format!("えー{tag}[{a}-{b}]"))
         });
         (Arc::new(r), spans)
     }
@@ -706,6 +722,15 @@ mod tests {
         segs: Vec<Segment>,
         fail: fn(usize, usize) -> bool,
     ) -> Spoken {
+        speak_and_stop_with(final_full_max, segs, fail, None)
+    }
+
+    fn speak_and_stop_with(
+        final_full_max: usize,
+        segs: Vec<Segment>,
+        fail: fn(usize, usize) -> bool,
+        final_rec: Option<Arc<dyn Recognizer>>,
+    ) -> Spoken {
         let (r, spans) = span_rec(fail);
         let mut s = Session::new(
             SessionConfig {
@@ -715,7 +740,8 @@ mod tests {
             r,
             Box::new(FakeVad::new(segs, S / 4)),
             Arc::new(PostProcessor::empty()),
-        );
+        )
+        .with_final_recognizer(final_rec);
         let mut ev = Vec::new();
         for chunk in positions(0..SPOKEN).chunks(1600) {
             ev.extend(s.push(chunk));
@@ -810,6 +836,60 @@ mod tests {
         );
         assert_eq!(run.final_spans, vec![(A.start - PAD, END)]);
         assert_model_error(&run.after_stop);
+    }
+
+    struct FinalStage {
+        run: Spoken,
+        calls: usize,
+        spans: Vec<(usize, usize)>,
+    }
+
+    fn with_final_stage(final_full_max: usize, final_fail: fn(usize, usize) -> bool) -> FinalStage {
+        let (f, spans) = tagged_span_rec("F", final_fail);
+        let run = speak_and_stop_with(final_full_max, vec![A, B], never, Some(f.clone()));
+        let spans = spans.lock().unwrap().clone();
+        FinalStage {
+            run,
+            calls: f.calls(),
+            spans,
+        }
+    }
+
+    #[test]
+    fn final_stage_recognizer_decodes_the_whole_utterance() {
+        let fs = with_final_stage(30 * S, never);
+        assert_eq!(fs.spans, vec![(A.start - PAD, END)]);
+        assert_eq!(
+            finals(&fs.run.after_stop),
+            vec![format!("F{}", text(A.start - PAD, END))]
+        );
+        assert!(fs.run.final_spans.is_empty(), "{:?}", fs.run.final_spans);
+        assert_eq!(
+            fs.run.partials.last(),
+            Some(&(text(A.start - PAD, A.end + PAD) + &text(B.start - PAD, SPOKEN)))
+        );
+        assert_eq!(fs.run.after_stop.last(), Some(&Event::State(State::Done)));
+    }
+
+    #[test]
+    fn over_the_limit_the_main_recognizer_joins_the_segments() {
+        let fs = with_final_stage(END - A.start - 1, never);
+        assert_eq!(fs.calls, 0, "{:?}", fs.spans);
+        assert_eq!(fs.run.final_spans, vec![(B.start - PAD, END)]);
+        assert_eq!(
+            finals(&fs.run.after_stop),
+            vec![text(A.start - PAD, A.end + PAD) + &text(B.start - PAD, END)]
+        );
+        let fs = with_final_stage(0, never);
+        assert_eq!(fs.calls, 0, "{:?}", fs.spans);
+    }
+
+    #[test]
+    fn final_stage_decode_error_reports_model_error() {
+        let fs = with_final_stage(30 * S, |_, _| true);
+        assert_eq!(fs.calls, 1);
+        assert!(fs.run.final_spans.is_empty(), "{:?}", fs.run.final_spans);
+        assert_model_error(&fs.run.after_stop);
     }
 
     #[test]

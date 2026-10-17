@@ -3,7 +3,7 @@ use koeinput_core::SAMPLE_RATE;
 use koeinput_core::build::load_engine;
 use koeinput_core::config::{Paths, load};
 use koeinput_core::engine::Engine;
-use koeinput_core::session::{Event, Session};
+use koeinput_core::session::Event;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -42,8 +42,7 @@ fn failure_line(f: &Path, e: &anyhow::Error) -> String {
 
 fn transcribe_file(engine: &Engine, partials: bool, f: &Path) -> Result<()> {
     let samples = koeinput_core::audio::file::read_wav_16k_mono(f)?;
-    let vad = (engine.vad)().map_err(|e| anyhow!(e))?;
-    let mut s = Session::new(engine.cfg, engine.rec.clone(), vad, engine.post.clone());
+    let mut s = engine.session().map_err(|e| anyhow!(e))?;
     println!("{}", f.display());
     let mut pushed = 0usize;
     let mut final_text = String::new();
