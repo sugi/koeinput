@@ -15,6 +15,9 @@ Each item names the milestone it belongs to.
   - Fillers are also removed inside longer words; judge this with real transcripts.
 
 - Model download: a download that stalls mid-body hangs `koeinput model install`. There is no idle timeout, and ureq 3 has no per-read timeout.
+- Daemon: a `Start` that arrives at the exact moment the bus drops can store a session after the shutdown cancel; mark the shared state as shutting down under the same lock so such a `Start` is refused.
+- Config: `koeinput model use` errors do not name the config file; `set_model` on a dangling symlink replaces the link with a regular file.
+- CLI: `transcribe` decides whether to add the file name by a substring check, which can drop the name when a very short path appears inside an unrelated message.
 
 ## M2 (fcitx5 addon)
 
