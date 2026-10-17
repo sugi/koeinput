@@ -121,7 +121,7 @@ The session logic lives in one class that knows nothing about fcitx5 or D-Bus, s
 
 Inputs (all with a monotonic time in milliseconds where it matters):
 
-- `hotkeyPress(now, eligible)`, `hotkeyRelease(now)`, `escape()`, `otherKeyPress()`, `focusLost()`;
+- `hotkeyPress(now, eligible, modifier)`, `hotkeyRelease(now)`, `escape()`, `otherKeyPress()`, `focusLost()`;
 - `startReply(id)` or `startFailed(kind, message)`;
 - `stateChanged(id, state)`, `partial(id, text)`, `finalText(id, text)`, `error(id, code, message)`;
 - `stopFailed(id)`, `daemonLeft()`, `timerFired()`.
@@ -140,9 +140,10 @@ Rules that need care:
 - **Stop or cancel before the reply.** A quick release, Esc or a focus change can come while `Starting`.
   The controller remembers it and sends `Stop` or `Cancel` as soon as the id is known.
   A pending cancel clears the display at once.
-- **Auto-repeat and lost releases.** A hotkey press while the key is already down is a repeat and is swallowed, unless more than 500 ms passed since the last hotkey press event.
-  Then the release was lost (some X11 input method paths do not forward releases), and the press counts as a new press.
-  Modifier keys do not auto-repeat, and other keys repeat every few tens of milliseconds, so the gap tells the two apart.
+- **Auto-repeat and lost releases.** Some X11 input method paths do not forward key releases, so a press can arrive while the key still counts as down.
+  - Modifier keys (such as the default `Alt_R`) never auto-repeat, so such a press always means the release was lost: it counts as a new press.
+  - Other keys auto-repeat. The first repeat comes after the desktop's initial delay (500 to 660 ms by default on GNOME, KDE and X.org), then every few tens of milliseconds.
+    A press within 1000 ms of the previous press event of that key is a repeat and is swallowed; after a longer gap the release was lost and the press counts as a new press.
 - **The daemon ends the session by itself** (the 120 s limit, an audio error). The final text or the error is handled as usual, and the key release that follows is swallowed.
 - **`Final` decides the commit.** The `done` state that follows on a separate signal only clears what is left.
   `cancelled` and `error` states end the session without a commit.
