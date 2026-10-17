@@ -1,5 +1,6 @@
 mod service;
 
+use anyhow::Context;
 use futures_util::StreamExt;
 use koeinput_core::build::{BuildError, load_engine};
 use koeinput_core::config::{Config, Paths, load};
@@ -19,7 +20,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let paths = Paths::from_env();
-    let cfg = load(&paths.config_file)?;
+    let cfg = load(&paths.config_file)
+        .with_context(|| format!("reading {}", paths.config_file.display()))?;
     let test_fake =
         cfg!(feature = "test-hooks") && std::env::var("KOEINPUT_TEST_FAKE").as_deref() == Ok("1");
     let shared = Arc::new(Mutex::new(Shared {
@@ -70,7 +72,13 @@ async fn main() -> anyhow::Result<()> {
             c.handle.cancel();
         }
     }
-    Ok(())
+    // Otherwise the runtime drop waits for the forwarder thread, which only ends with the session.
+    if let Some(c) = shared.lock().unwrap().current.take() {
+        tracing::info!(session = c.id, "bus connection closed; cancelling");
+        c.handle.cancel();
+    }
+    // Exiting non-zero lets Restart=on-failure bring the daemon back once the bus is up again.
+    anyhow::bail!("session bus connection closed")
 }
 
 async fn load_model(

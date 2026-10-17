@@ -516,4 +516,93 @@ mod tests {
         s.push(&audio(&[(2 * S, 0.1)]));
         assert_eq!(finals(&s.end_of_audio()), vec!["壱".to_string()]);
     }
+
+    fn failing_rec() -> Arc<FakeRecognizer> {
+        Arc::new(FakeRecognizer::new(|_| {
+            Err(RecognizerError::Decode("boom".into()))
+        }))
+    }
+
+    fn assert_model_error(ev: &[Event]) {
+        let errors = ev
+            .iter()
+            .filter(|e| matches!(e, Event::Error { code, .. } if code == "model"))
+            .count();
+        assert_eq!(errors, 1, "{ev:?}");
+        assert_eq!(ev.last(), Some(&Event::State(State::Error)), "{ev:?}");
+        assert!(finals(ev).is_empty(), "{ev:?}");
+    }
+
+    #[test]
+    fn recognizer_error_during_finalize() {
+        let mut s = session(
+            failing_rec(),
+            vec![Segment {
+                start: 0,
+                end: 2 * S,
+            }],
+        );
+        let ev = s.push(&audio(&[(S / 4, 0.1)]));
+        assert_eq!(ev, vec![Event::State(State::Recording)]);
+        let ev = s.end_of_audio();
+        assert_model_error(&ev);
+        assert_eq!(s.state(), State::Error);
+        assert!(s.is_finished());
+    }
+
+    #[test]
+    fn recognizer_error_on_partial_tick() {
+        let mut s = session(
+            failing_rec(),
+            vec![Segment {
+                start: 0,
+                end: 4 * S,
+            }],
+        );
+        let ev = s.push(&audio(&[(S, 0.1)]));
+        assert!(!ev.iter().any(|e| matches!(e, Event::Partial(_))), "{ev:?}");
+        assert_model_error(&ev);
+        assert_eq!(s.state(), State::Error);
+        assert!(s.is_finished());
+        assert!(s.push(&audio(&[(S, 0.1)])).is_empty());
+    }
+
+    #[test]
+    fn max_length_reached_during_tail() {
+        let mut s = Session::new(
+            SessionConfig {
+                max_length: S + S / 8,
+                ..cfg()
+            },
+            rec(),
+            Box::new(FakeVad::new(vec![Segment { start: 0, end: S }], S / 4)),
+            Arc::new(PostProcessor::empty()),
+        );
+        s.push(&audio(&[(S, 0.1)]));
+        assert_eq!(s.stop(), vec![Event::State(State::Finalizing)]);
+        assert!(finals(&s.push(&audio(&[(S / 16, 0.1)]))).is_empty());
+        let ev = s.push(&audio(&[(S / 16, 0.1)]));
+        assert_eq!(
+            ev,
+            vec![Event::Final("一".into()), Event::State(State::Done)]
+        );
+        assert!(s.push(&audio(&[(S, 0.1)])).is_empty());
+        assert!(s.end_of_audio().is_empty());
+    }
+
+    #[test]
+    fn session_config_from_config() {
+        let c = Config {
+            partial_interval_ms: 500,
+            tail_ms: 250,
+            min_length_ms: 300,
+            max_length_ms: 120_000,
+            ..Config::default()
+        };
+        let sc = SessionConfig::from_config(&c);
+        assert_eq!(sc.partial_interval, 8000);
+        assert_eq!(sc.tail, 4000);
+        assert_eq!(sc.min_length, 4800);
+        assert_eq!(sc.max_length, 1_920_000);
+    }
 }
