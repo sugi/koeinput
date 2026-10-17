@@ -195,6 +195,8 @@ void Controller::error(uint32_t id, const std::string &code, const std::string &
 }
 
 void Controller::daemonLeft() {
+    // Session ids restart at 1 in every daemon process.
+    lastCancelledId_.reset();
     if (phase_ == Phase::Idle) return;
     const bool quiet = pendingCancel_;
     finish();

@@ -733,6 +733,19 @@ void late_reply_after_stray_signal_is_cancelled_once() {
     CHECK_LOG(f.a.take());
 }
 
+// Session ids restart at 1 in every daemon process, so an id cancelled under
+// the previous daemon can belong to a new stray session.
+void daemon_left_resets_cancelled_id() {
+    Fixture f;
+    f.recording();
+    CHECK(f.c.escape());
+    CHECK_LOG(f.a.take(), "cancel 7", "clear");
+    f.c.daemonLeft();
+    CHECK_LOG(f.a.take());
+    f.c.stateChanged(7, "recording");
+    CHECK_LOG(f.a.take(), "cancel 7");
+}
+
 void finished_session_signals_do_not_cancel() {
     Fixture f;
     f.recording();
@@ -811,6 +824,7 @@ int main() {
         T(own_cancel_is_not_repeated),
         T(late_reply_after_stray_signal_is_cancelled_once),
         T(finished_session_signals_do_not_cancel),
+        T(daemon_left_resets_cancelled_id),
 #undef T
     };
     for (auto &t : tests) {

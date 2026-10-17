@@ -6,6 +6,7 @@
 #include <fcitx-utils/dbus/servicewatcher.h>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace koeinput {
@@ -47,7 +48,8 @@ private:
 
     fcitx::dbus::Bus &bus_;
     DaemonCallbacks cb_;
-    std::string owner_;
+    // nullopt until the watcher answers; empty when the name has no owner.
+    std::optional<std::string> owner_;
     fcitx::dbus::ServiceWatcher watcher_;
     std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> watch_;
     std::unique_ptr<fcitx::dbus::Slot> match_;

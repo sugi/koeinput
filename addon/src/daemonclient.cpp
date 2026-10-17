@@ -69,8 +69,9 @@ void DaemonClient::cancel(uint32_t id) {
 
 bool DaemonClient::onSignal(Message &message) {
     if (message.type() != fcitx::dbus::MessageType::Signal) return false;
-    // An empty owner means the watcher's first lookup has not answered yet.
-    if (!owner_.empty() && message.sender() != owner_) return false;
+    // Before the watcher's first answer every sender is accepted; without an
+    // owner there is no daemon, so every signal is a forgery.
+    if (owner_ && message.sender() != *owner_) return false;
     const std::string member = message.member();
     uint32_t id = 0;
     std::string a;
