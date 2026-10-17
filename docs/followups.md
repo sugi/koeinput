@@ -22,6 +22,13 @@ Each item names the milestone it belongs to.
 ## M2 (fcitx5 addon)
 
 - `Final` is sent before the `done` state, but on separate signals. Base timing and commit logic on `Final` itself, not on the order in which a client happens to process the two.
+- Two configured hotkeys pressed together: the release of the second can pass through without its press, because the addon remembers one press at a time.
+- `ISO_Level3_Shift` (AltGr) is not `Key::isModifier()`, so pressing it during a session counts as another key and cancels.
+- Without the frontend's repeat flag, the 1000 ms repeat window is refreshed by each matched repeat; the addon test covers the flagged path and a single unflagged repeat, not a long chain of unflagged repeats.
+- Rolling a bare key into a combination hotkey (press `space`, then `Control` while `space` is still down) is not recognized as the hotkey.
+- Clients using text-input-v3 (Chrome, Discord) may commit their own composition on blur even though the client preedit is marked `DontCommit`. Input for the per-app display choice in M4.
+- An input method switch key during a session is handled by fcitx5 before the addon: the session keeps running while the engine change may wipe the status.
+- The `DaemonProcess` test helper: a ready-timeout abort leaves the daemon child running; the child uses stdio between fork and exec; the temporary directories are not removed.
 
 ## Done
 

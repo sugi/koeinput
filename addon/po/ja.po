@@ -1,0 +1,63 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: fcitx5-koeinput\n"
+"Report-Msgid-Bugs-To: \n"
+"Language: ja\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Hotkey"
+msgstr "ホットキー"
+
+msgid "Tap to keep recording"
+msgstr "短く押したら録音を続ける"
+
+msgid "Tap threshold (ms)"
+msgstr "短押しとみなす時間（ミリ秒）"
+
+msgid "Show partial results"
+msgstr "話している途中の文字を表示する"
+
+msgid "Preparing…"
+msgstr "準備中…"
+
+msgid "Recording"
+msgstr "録音中"
+
+msgid "Recording (press again to finish)"
+msgstr "録音中（もう一度押すと確定）"
+
+msgid "Recognizing…"
+msgstr "認識中…"
+
+msgid "KoeInput"
+msgstr "KoeInput"
+
+msgid "The KoeInput daemon is not running."
+msgstr "KoeInput デーモンが動いていません。"
+
+msgid "The speech model is not ready."
+msgstr "音声認識モデルの準備ができていません。"
+
+msgid "Another dictation is running."
+msgstr "別の音声入力が実行中です。"
+
+msgid "The KoeInput daemon does not respond."
+msgstr "KoeInput デーモンが応答しません。"
+
+msgid "Cannot record from the microphone."
+msgstr "マイクから録音できません。"
+
+msgid "Speech recognition failed."
+msgstr "音声認識に失敗しました。"
+
+msgid "The KoeInput daemon reported an error."
+msgstr "KoeInput デーモンでエラーが起きました。"
+
+msgid "The KoeInput daemon stopped."
+msgstr "KoeInput デーモンが停止しました。"
+
+msgid "Dictation failed."
+msgstr "音声入力に失敗しました。"

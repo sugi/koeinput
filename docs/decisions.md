@@ -1,6 +1,6 @@
 # KoeInput: decisions so far
 
-Last updated: 2026-10-17.
+Last updated: 2026-10-18.
 
 Each item has one of these labels:
 
@@ -17,7 +17,7 @@ Each item has one of these labels:
 - Command: `koeinput`. Daemon: `koeinput-daemon`.
 - D-Bus name: `org.nemui.KoeInput`.
 - A two-letter package name such as `ki` was rejected because it collides easily (an existing crate, and the Kotlin interactive shell command).
-- The repository directory name `voice-flood` is temporary.
+- The repository directory was renamed from `voice-flood` to `koeinput` on 2026-10-18.
 
 ## Goal
 
@@ -148,8 +148,15 @@ Measured on 2026-10-17:
   An addon crash stops all typing.
 - **Decided**: Detect key release the same way vinput does: release events in an event watcher at the `PreInputMethod` phase.
   No separate test beforehand; M2 confirms it. The code is our own.
-- **Open**: Which hotkey. A modifier-only key such as Right Alt, or 無変換 / 変換, which Mozc also uses.
-- **Open**: Where to show partial results: inline preedit, or the fcitx5 panel.
+- **Decided** (2026-10-18): The default hotkey is Right Alt, for now.
+  It must be changeable in the fcitx5 settings window.
+- **Decided** (2026-10-18): Two ways to press the hotkey:
+  - hold it while speaking, and release it to finish (push-to-talk);
+  - tap it to start, then press it again to finish (hands-free, for long dictation).
+- **Decided** (2026-10-18): If Mozc is composing when the hotkey is pressed, do not start recording, and pass the key to Mozc.
+- **Decided** (2026-10-18): M2 already shows partial results, as preedit in the app.
+  Apps without preedit support get them in the fcitx5 panel.
+- **Open**: Whether partial results should move to the fcitx5 panel for some apps. Decide in M4 after daily use.
   Terminals and Emacs handle inline preedit differently.
 - **Open**: Cancel with Esc, a maximum recording length, and what to show when the daemon does not respond.
 - **Open**: Undo of the last commit. It depends on app support for surrounding text.
@@ -260,11 +267,14 @@ Notes:
 3. Done: spike summary in [spike-results.md](spike-results.md). Default model: parakeet-ja.
 4. From here on, follow the milestones in [the overall design](superpowers/specs/2026-10-17-overall-design.md).
 5. Done (2026-10-17): M1, the daemon and the CLI, merged into `main`. The microphone check with `koeinput listen` is still to be done by the user.
-6. Next: M2, the minimal fcitx5 addon. Current state and open questions: [status.md](status.md).
+6. In progress (2026-10-18): M2, the minimal fcitx5 addon. Current state: [status.md](status.md).
+
+## License and hosting
+
+- **Decided** (2026-10-18): The project license is `MIT OR Apache-2.0`.
+- **Decided** (2026-10-18): The repository goes to a private GitHub repository, `sugi/koeinput`, with GitHub Actions for CI.
+  Making it public is the user's decision.
 
 ## Open items
 
-- License of this project.
-- Final choice of the daemon language (after the spike).
-- The D-Bus interface.
-- The hotkey.
+None that block work. Items marked Open above are decided in the milestone that needs them.

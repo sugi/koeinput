@@ -1,0 +1,90 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the fcitx5-koeinput package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: fcitx5-koeinput\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-17 20:38+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: addon/src/koeinput.cpp:28
+msgid "Preparing…"
+msgstr ""
+
+#: addon/src/koeinput.cpp:29
+msgid "Recording"
+msgstr ""
+
+#: addon/src/koeinput.cpp:30
+msgid "Recording (press again to finish)"
+msgstr ""
+
+#: addon/src/koeinput.cpp:31
+msgid "Recognizing…"
+msgstr ""
+
+#: addon/src/koeinput.cpp:42
+msgid "The KoeInput daemon is not running."
+msgstr ""
+
+#: addon/src/koeinput.cpp:43
+msgid "The speech model is not ready."
+msgstr ""
+
+#: addon/src/koeinput.cpp:44
+msgid "Another dictation is running."
+msgstr ""
+
+#: addon/src/koeinput.cpp:45
+msgid "The KoeInput daemon does not respond."
+msgstr ""
+
+#: addon/src/koeinput.cpp:46
+msgid "Cannot record from the microphone."
+msgstr ""
+
+#: addon/src/koeinput.cpp:47
+msgid "Speech recognition failed."
+msgstr ""
+
+#: addon/src/koeinput.cpp:48
+msgid "The KoeInput daemon reported an error."
+msgstr ""
+
+#: addon/src/koeinput.cpp:49
+msgid "The KoeInput daemon stopped."
+msgstr ""
+
+#: addon/src/koeinput.cpp:50
+msgid "Dictation failed."
+msgstr ""
+
+#: addon/src/koeinput.cpp:205
+msgid "KoeInput"
+msgstr ""
+
+#: addon/src/config.h:13
+msgid "Hotkey"
+msgstr ""
+
+#: addon/src/config.h:16
+msgid "Tap to keep recording"
+msgstr ""
+
+#: addon/src/config.h:18
+msgid "Tap threshold (ms)"
+msgstr ""
+
+#: addon/src/config.h:19
+msgid "Show partial results"
+msgstr ""

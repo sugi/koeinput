@@ -24,7 +24,7 @@ Decisions themselves live in [decisions.md](decisions.md).
 |---|---|
 | M0. Model spike | Done. Default model: parakeet-ja (int8, sherpa-onnx). |
 | M1. Daemon and CLI | Implemented and merged into `main` (merge commit `dc1a3bf`). One check left, see below. |
-| M2. Minimal fcitx5 addon | Next. Design not started. |
+| M2. Minimal fcitx5 addon | Implemented on branch `m2-addon` (merge pending). Tests pass in the Debian 13 and Debian 12 images. The host check is pending and is done together with the M3 packages. |
 | M3. Debian packaging | Not started. |
 | M4. Quality | Not started. |
 | M5. RPM, PKGBUILD, CI, release | Not started. |
@@ -41,17 +41,14 @@ Decisions themselves live in [decisions.md](decisions.md).
   - `transcribe` on the user's recordings produced text, with the final result ready at the end of the audio;
   - `listen` works against the test-hooks fake daemon.
 
-## Next: M2 design
+## M2: the minimal fcitx5 addon
 
-Start with the brainstorming process (questions, then a written spec, then a plan).
-Three questions are open for the user:
+The user answered the open questions on 2026-10-18 (recorded in decisions.md):
+Right Alt as the default hotkey with a settings window, hold and tap both supported, no start while Mozc is composing, and partial results as preedit already in M2.
+License `MIT OR Apache-2.0`; a private GitHub repository `sugi/koeinput` in M5.
 
-1. **Hotkey.** A modifier-only key such as Right Alt, or 無変換 / 変換, which Mozc also uses.
-   It will be changeable in the fcitx5 settings window either way.
-2. **Mozc composing when the hotkey is pressed.** The user accepts either "do not start recording" or "leave the composition as it is".
-   Recommendation: do not start.
-3. **Partial results in M2.** The overall design puts the partial display in M4.
-   The user wants to see text while speaking, so the recommendation is a simple version in M2 (partial text as preedit), with the display location refined in M4.
+The user asked for all milestones to be implemented in order without stopping for spec reviews or host checks.
+Host checks are collected and handed to the user.
 
 Facts already checked for M2 (2026-10-17):
 
@@ -65,8 +62,6 @@ Facts already checked for M2 (2026-10-17):
 - Only the host can show whether key release events arrive through KWin, how each app renders preedit, and whether the addon loads in the host's newer fcitx5.
 - Target apps for the final check: WezTerm, Chrome, Firefox, Emacs, Discord.
 
-Later decisions that are still open: the project license (before the first release), and the repository host and CI (M5; the repository has no remote yet).
-
 ## Working environment
 
 ### Machines
@@ -77,10 +72,10 @@ Later decisions that are still open: the project license (before the first relea
   - It shares only three sockets with the host: the session bus (`/run/user/1000/bus`), PulseAudio (`/run/user/1000/pulse/native`, `PULSE_SERVER` is set) and `wayland-0`. There is no PipeWire native socket, which is why capture uses the PulseAudio API.
   - It is started with `--rm`, so everything outside bind mounts disappears when it stops, including `/tmp`.
   - Bind-mounted from the host, so it survives (checked with `findmnt` on 2026-10-18):
-    - the repository `/home/sugi/works/git/nemui/voice-flood`, including `work/` and `target/`;
+    - the repository `/home/sugi/works/git/nemui/koeinput`, including `work/` and `target/`;
     - the podman storage `~/.local/share/containers` (the build image and its layers);
     - `~/.cargo`, `~/.rustup` and `~/.claude`.
-  - The container ID changes on every start. To get a shell from a host terminal, find it with `docker ps`, then run `docker exec -it -u sugi -w /home/sugi/works/git/nemui/voice-flood <container> bash`.
+  - The container ID changes on every start. To get a shell from a host terminal, find it with `docker ps`, then run `docker exec -it -u sugi -w /home/sugi/works/git/nemui/koeinput <container> bash`.
 
 ### Building
 
@@ -124,5 +119,5 @@ kill %1
 - **Answer in Japanese.** The user often dictates by voice, so expect recognition errors in messages, for example "V インプット" for vinput, "5K" for "5系" (5.x) and "KI" for the short name of KoeInput.
 - The user prefers moderate evaluation over strict measurement ("models can be changed later") and wants decisions written to files.
 - Never copy code from fcitx5-vinput (GPL-3.0). Its design ideas are summarized in decisions.md.
-- Implementer subagents must start every shell command with `cd /home/sugi/works/git/nemui/voice-flood && `, must not leave background processes, and must not run commands that wait on stdin.
+- Implementer subagents must start every shell command with `cd /home/sugi/works/git/nemui/koeinput && `, must not leave background processes, and must not run commands that wait on stdin.
 - Never run the opt-in microphone test or `koeinput listen` against the real microphone on the user's behalf. Microphone checks belong to the user.
