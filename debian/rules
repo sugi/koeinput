@@ -1,0 +1,76 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+# The C code that crate build scripts compile (ring, zstd-sys and others) takes
+# its flags from the environment.
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+include /usr/share/dpkg/buildopts.mk
+include /usr/share/dpkg/pkg-info.mk
+
+# Cargo builds offline from vendor/ and keeps away from ~/.cargo.
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+# Both paths must be absolute: the sherpa-onnx-sys build script reads them as they are.
+export CARGO_TARGET_DIR = $(CURDIR)/target
+export SHERPA_ONNX_LIB_DIR = $(CURDIR)/debian/sherpa-lib
+# Line tables and no stripping by cargo, so that dh_strip makes the -dbgsym packages.
+export CARGO_PROFILE_RELEASE_DEBUG = line-tables-only
+export CARGO_PROFILE_RELEASE_STRIP = none
+export CARGO_BUILD_JOBS = $(or $(DEB_BUILD_OPTION_PARALLEL),1)
+export RUSTFLAGS = --remap-path-prefix=$(CURDIR)=/usr/src/koeinput-$(DEB_VERSION_UPSTREAM)
+CARGO_FLAGS = --release --frozen --offline --workspace
+
+%:
+	dh $@ --buildsystem=cmake --sourcedirectory=addon
+
+debian/cargo-home/config.toml:
+	mkdir -p $(@D)
+	printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n[net]\noffline = true\n' "$(CURDIR)/vendor" >$@
+
+# sherpaonnx/ is the no-TTS archive. The sherpa-onnx-sys build script still links
+# espeak-ng, piper_phonemize and ucd (the GPL text-to-speech code), so they get
+# empty archives here, as in scripts/sherpa-onnx.
+debian/sherpa-lib/stamp:
+	mkdir -p $(@D)
+	ln -sf $(CURDIR)/sherpaonnx/lib/*.a $(@D)/
+	set -e; for n in espeak-ng piper_phonemize ucd; do \
+	  if [ -e sherpaonnx/lib/lib$$n.a ]; then \
+	    echo "sherpaonnx/lib/lib$$n.a exists: not the no-TTS archive" >&2; exit 1; \
+	  fi; \
+	  ar rcs $(@D)/lib$$n.a; \
+	done
+	touch $@
+
+override_dh_auto_configure: debian/cargo-home/config.toml debian/sherpa-lib/stamp
+	dh_auto_configure
+
+override_dh_auto_build:
+	dh_auto_build
+	cargo build $(CARGO_FLAGS) --bins
+	scripts/check-no-gpl target/release/koeinput target/release/koeinput-daemon
+	target/release/koeinput manpage >debian/koeinput.1
+
+# The addon's D-Bus and fcitx5 tests and the daemon's D-Bus tests need a session
+# bus and a test daemon; they run in the development test runs only.
+override_dh_auto_test:
+	dh_auto_test -- 'ARGS+=-R controller'
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	cargo test $(CARGO_FLAGS)
+endif
+
+override_dh_auto_install:
+	dh_auto_install
+	install -D -m 0755 target/release/koeinput debian/tmp/usr/bin/koeinput
+	install -D -m 0755 target/release/koeinput-daemon debian/tmp/usr/libexec/koeinput/koeinput-daemon
+	install -D -m 0644 data/koeinput.service debian/tmp/usr/lib/systemd/user/koeinput.service
+	install -D -m 0644 data/org.nemui.KoeInput.service debian/tmp/usr/share/dbus-1/services/org.nemui.KoeInput.service
+	install -D -m 0644 data/models.toml debian/tmp/usr/share/koeinput/models.toml
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf target debian/cargo-home debian/sherpa-lib debian/koeinput.1
+
+# dh_clean deletes *.orig files, which would take the vendored Cargo.toml.orig
+# files with it and break cargo's checksums of the vendored crates.
+override_dh_clean:
+	dh_clean -XCargo.toml.orig

@@ -1,0 +1,56 @@
+Source: koeinput
+Section: utils
+Priority: optional
+Maintainer: Tatsuki Sugiura <sugi@nemui.org>
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo (>= 1.89),
+ rustc (>= 1.89),
+ pkgconf,
+ libpulse-dev,
+ cmake (>= 3.25),
+ extra-cmake-modules,
+ gettext,
+ libfcitx5core-dev,
+ libfcitx5config-dev,
+ libfcitx5utils-dev,
+ fcitx5-modules-dev,
+ binutils,
+Rules-Requires-Root: no
+Standards-Version: 4.7.2
+
+Package: koeinput
+Architecture: amd64
+Depends:
+ default-dbus-session-bus | dbus-session-bus,
+ ${misc:Depends},
+ ${shlibs:Depends},
+Suggests:
+ fcitx5-koeinput,
+Description: local Japanese dictation daemon and command-line tool
+ KoeInput turns Japanese speech from the microphone into text. Recognition
+ runs locally on the CPU, so the audio never leaves the computer.
+ .
+ This package contains the daemon, which D-Bus starts when it is first
+ needed, and the koeinput command, which shows the daemon's status,
+ transcribes WAV files and manages recognition models.
+ .
+ No model is included. Download one with "koeinput model install", for
+ example "koeinput model install parakeet-ja".
+
+Package: fcitx5-koeinput
+Architecture: amd64
+Depends:
+ fcitx5,
+ koeinput (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: KoeInput dictation addon for fcitx5
+ KoeInput turns Japanese speech from the microphone into text. Recognition
+ runs locally on the CPU, so the audio never leaves the computer.
+ .
+ This fcitx5 addon adds push-to-talk dictation: hold the hotkey and speak,
+ and the recognized text goes into the focused input field. The current
+ input method, such as Mozc, stays active.
+ .
+ Models are downloaded separately with "koeinput model install".

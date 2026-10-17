@@ -1,0 +1,103 @@
+#!/bin/sh
+# Builds the Debian packages for one distribution and checks them with lintian.
+# The build runs in a podman container without network, from the orig tarballs in
+# target/deb/ (made by scripts/make-orig when missing) and the debian/ directory of
+# the work tree. Packages, the source package, the build log and the lintian output
+# go to target/deb/<dist>/.
+# Usage: scripts/build-deb trixie|testing
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+die() {
+  echo "scripts/build-deb: $*" >&2
+  exit 1
+}
+case "${1:-}" in
+  trixie | testing) dist=$1 ;;
+  *)
+    echo "usage: scripts/build-deb trixie|testing" >&2
+    exit 2 ;;
+esac
+
+# Files outside debian/ come from the orig tarball, which is HEAD; uncommitted
+# changes there would silently be left out of the build.
+if [ -n "$(git status --porcelain -- . ':(exclude)debian')" ]; then
+  die "commit the changes outside debian/ first; the build takes them from HEAD"
+fi
+scripts/gen-copyright --check
+
+version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
+[ -n "$version" ] || die "cannot read the version from debian/changelog"
+upstream=${version#*:}
+upstream=${upstream%-*}
+base=koeinput_$upstream
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# scripts/make-orig makes missing tarballs, and stops when the main tarball no
+# longer matches HEAD (the other two follow from files in it).
+current=yes
+for file in "$base.orig.tar.xz" "$base.orig-vendor.tar.xz" "$base.orig-sherpaonnx.tar.bz2"; do
+  [ -e "target/deb/$file" ] || current=no
+done
+if [ $current = yes ]; then
+  git archive --format=tar --prefix="koeinput-$upstream/" HEAD -- . ':(exclude)debian' >"$tmp/main.tar"
+  xz -dc "target/deb/$base.orig.tar.xz" | cmp -s - "$tmp/main.tar" || current=no
+fi
+[ $current = yes ] || scripts/make-orig
+
+containerfile=packaging/containers/deb-$dist.Containerfile
+image="localhost/koeinput-deb-$dist:$(sha256sum "$containerfile" | cut -c1-12)"
+if ! podman image exists "$image"; then
+  nice -n 10 podman build -t "$image" -f "$containerfile" packaging/containers
+fi
+
+out=target/deb/$dist
+rm -rf "$out"
+mkdir -p "$out"
+for file in "$base.orig.tar.xz" "$base.orig-vendor.tar.xz" "$base.orig-sherpaonnx.tar.bz2"; do
+  ln -s "../$file" "$out/$file"
+done
+
+# Runs in the container: unpack the components, make the source package, build
+# the binary packages from it with dpkg-source -x, then lintian.
+build='
+set -eu
+mkdir -p "$HOME" /tmp/build
+cd /tmp/build
+for f in /src/target/deb/$BASE.orig*; do ln -s "$f" .; done
+mkdir $PKG $PKG/vendor $PKG/sherpaonnx
+tar -xf $BASE.orig.tar.xz -C $PKG --strip-components=1
+tar -xf $BASE.orig-vendor.tar.xz -C $PKG/vendor --strip-components=1
+tar -xf $BASE.orig-sherpaonnx.tar.bz2 -C $PKG/sherpaonnx --strip-components=1
+cp -r /src/debian $PKG/debian
+(cd $PKG && dpkg-buildpackage -us -uc -S)
+dpkg-source -x ${BASE}-$REVISION.dsc build
+(cd build && dpkg-buildpackage -us -uc -b -Jauto)
+status=0
+lintian -EvIL +pedantic --fail-on error,warning \
+  --suppress-tags initial-upload-closes-no-bugs,no-homepage-field,debian-watch-file-is-missing,spelling-error-in-binary \
+  ${BASE}-${REVISION}_amd64.changes >lintian.txt 2>&1 || status=$?
+cat lintian.txt
+cp *.deb *.changes *.buildinfo *.dsc *.debian.tar.* lintian.txt /out/
+if grep -q "^[EW]: " lintian.txt; then
+  echo "lintian reported errors or warnings" >&2
+  exit 1
+fi
+[ $status -eq 0 ] || { echo "lintian failed with status $status" >&2; exit 1; }
+'
+# tini as PID 1 passes signals on, so Ctrl-C or a timeout stops the build.
+# (podman run --init would need catatonit on the host.)
+{
+  nice -n 10 podman run --rm --network=none --userns=keep-id \
+    -v "$root:/src:ro" -v "$root/$out:/out" \
+    -e HOME=/tmp/home -e DEB_BUILD_OPTIONS \
+    -e BASE="$base" -e PKG="koeinput-$upstream" -e REVISION="${version##*-}" \
+    "$image" tini -g -- sh -c "$build" || echo $? >"$tmp/failed"
+} 2>&1 | tee "$out/build.log"
+if [ -e "$tmp/failed" ]; then
+  die "the build failed; see $out/build.log"
+fi
+echo "packages and lintian output in $out/"

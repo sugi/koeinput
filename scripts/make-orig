@@ -1,0 +1,88 @@
+#!/bin/sh
+# Makes the orig tarballs of the Debian source package in target/deb/:
+#   koeinput_V.orig.tar.xz              git archive of HEAD without debian/
+#   koeinput_V.orig-vendor.tar.xz       the crates of Cargo.lock, with the crates that
+#                                       x86_64 Linux does not build replaced by stubs
+#   koeinput_V.orig-sherpaonnx.tar.bz2  the pinned sherpa-onnx archive, byte for byte
+# V is the upstream version in debian/changelog. An orig tarball must not change
+# within one version, so an existing tarball with the same content is kept and one
+# with different content is an error.
+# Usage: scripts/make-orig
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+. packaging/sherpa-onnx.env
+
+die() {
+  echo "scripts/make-orig: $*" >&2
+  exit 1
+}
+
+if [ -n "$(git status --porcelain)" ]; then
+  die "the work tree has uncommitted or untracked files; the tarballs are made from HEAD"
+fi
+version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
+[ -n "$version" ] || die "cannot read the version from debian/changelog"
+upstream=${version#*:}
+upstream=${upstream%-*}
+base=koeinput_$upstream
+out=target/deb
+mkdir -p "$out"
+tmp=$(mktemp -d "$out/.make-orig.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# keep NAME FILE SHOW: puts FILE in place as $out/NAME, or keeps an existing NAME
+# when SHOW (a command that prints a file's content: cat, xz -dc) prints the same.
+keep() {
+  name=$1 new=$2 show=$3
+  if [ -e "$out/$name" ]; then
+    if $show "$out/$name" | cmp -s - "$new"; then
+      echo "$out/$name: unchanged"
+      return
+    fi
+    die "$out/$name exists with different content. An orig tarball must not change
+within one version: if $upstream was never published, delete $out/${base}.orig*
+and run again; otherwise raise the upstream version in debian/changelog."
+  fi
+  case $show in
+    cat) mv "$new" "$out/$name" ;;
+    *) xz -T0 -c "$new" >"$tmp/$name" && mv "$tmp/$name" "$out/$name" ;;
+  esac
+  echo "$out/$name: written"
+}
+
+# debian/ goes into the .debian.tar.xz only; lintian warns (no-debian-changes) when
+# the orig tarball has the same files.
+git archive --format=tar --prefix="koeinput-$upstream/" HEAD -- . ':(exclude)debian' >"$tmp/main.tar"
+keep "$base.orig.tar.xz" "$tmp/main.tar" "xz -dc"
+
+scripts/sherpa-onnx >/dev/null
+cp "work/cache/sherpa-onnx/$SHERPA_ONNX_FILE" "$tmp/sherpa.tar.bz2"
+sum=$(sha256sum "$tmp/sherpa.tar.bz2" | cut -d' ' -f1)
+[ "$sum" = "$SHERPA_ONNX_SHA256" ] ||
+  die "work/cache/sherpa-onnx/$SHERPA_ONNX_FILE has SHA-256 $sum, expected $SHERPA_ONNX_SHA256"
+keep "$base.orig-sherpaonnx.tar.bz2" "$tmp/sherpa.tar.bz2" cat
+
+# cargo-vendor-filterer has no --locked option; the tree was clean, so any change
+# to Cargo.lock here means it was out of date.
+# The time of the last manifest change, so the tarball does not change with
+# commits that leave the crates alone.
+mtime=$(git log -1 --format=%ct HEAD -- Cargo.lock Cargo.toml 'crates/*/Cargo.toml')
+scripts/dev sh -c "
+  set -e
+  cargo vendor-filterer --platform=x86_64-unknown-linux-gnu --versioned-dirs $tmp/vendor \
+    >$tmp/vendor.log 2>&1 || { cat $tmp/vendor.log >&2; exit 1; }
+  tar --sort=name --mtime=@$mtime --owner=0 --group=0 --numeric-owner --mode=u+rw,go=rX,a-s \
+    -cf $tmp/vendor.tar -C $tmp vendor
+"
+git diff --quiet Cargo.lock || die "cargo changed Cargo.lock; commit an up-to-date Cargo.lock first"
+# The same names that dh_clean deletes; debian/rules keeps only Cargo.toml.orig.
+cleaned=$(find "$tmp/vendor" \( -type f \( -name '#*#' -o -name '*~' -o -name DEADJOE \
+  -o -name '*.orig' -o -name '*.rej' -o -name '*.bak' -o -name .SUMS -o -name TAGS \
+  -o -path '*/.deps/*' -name '*.P' \) ! -name Cargo.toml.orig \) \
+  -o \( -type d \( -name autom4te.cache -o -name __pycache__ \) \))
+[ -z "$cleaned" ] || die "dh_clean would delete these vendored files; exclude them in
+override_dh_clean in debian/rules:
+$cleaned"
+keep "$base.orig-vendor.tar.xz" "$tmp/vendor.tar" "xz -dc"

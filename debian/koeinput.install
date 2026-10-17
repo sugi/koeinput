@@ -1,0 +1,5 @@
+usr/bin/koeinput
+usr/libexec/koeinput/koeinput-daemon
+usr/lib/systemd/user/koeinput.service
+usr/share/dbus-1/services/org.nemui.KoeInput.service
+usr/share/koeinput/models.toml
