@@ -10,6 +10,7 @@
 #include <fcitx/inputpanel.h>
 #include <fcitx/text.h>
 #include <fcitx/userinterface.h>
+#include <algorithm>
 
 namespace koeinput {
 
@@ -74,6 +75,9 @@ KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
             controller_.error(id, c, m);
         };
         cb.daemonLeft = [this] { controller_.daemonLeft(); };
+        cb.activateFailed = [](const std::string &m) {
+            KOEINPUT_WARN() << "Cannot start the KoeInput daemon: " << m;
+        };
         client_ = std::make_unique<DaemonClient>(*bus, std::move(cb));
     }
     watchers_.emplace_back(instance_->watchEvent(
@@ -95,6 +99,8 @@ KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
                 controller_.focusLost();
             }
         }));
+    // So the model is loaded by the first dictation.
+    if (client_) client_->activate();
 }
 
 KoeInputAddon::~KoeInputAddon() = default;
@@ -127,26 +133,52 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
 
 void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     const auto &key = event.key();
+    const uint64_t now = nowMs();
+    const bool sameKey = (hotkeyCode_ != 0 && key.code() == hotkeyCode_) ||
+                         (hotkeySym_ != FcitxKey_None && key.sym() == hotkeySym_);
     bool swallow = false;
     if (event.isRelease()) {
-        const bool pressedHotkey = hotkeySym_ != FcitxKey_None && key.sym() == hotkeySym_;
-        if (pressedHotkey || key.checkKeyList(*config_.hotkey)) {
+        const auto &hotkeys = *config_.hotkey;
+        const bool modifierRelease =
+            std::any_of(hotkeys.begin(), hotkeys.end(), [&](const fcitx::Key &k) {
+                return k.isModifier() && key.isReleaseOfModifier(k);
+            });
+        if (sameKey || modifierRelease || key.checkKeyList(hotkeys)) {
+            hotkeyCode_ = 0;
             hotkeySym_ = FcitxKey_None;
-            swallow = controller_.hotkeyRelease(nowMs());
+            swallow = controller_.hotkeyRelease(now);
         } else if (key.sym() == FcitxKey_Escape && escapeDown_) {
             escapeDown_ = false;
             swallow = true;
         }
-    } else if (key.checkKeyList(*config_.hotkey)) {
+        if (swallow) event.filterAndAccept();
+        return;
+    }
+    // Once the modifiers of a combination hotkey are released, its auto-repeat
+    // arrives as the bare key. Frontends that flag repeats settle it; without
+    // the flag, a bare press after a longer gap means the key was released and
+    // the release lost, so the press is an ordinary key again.
+    // key() is normalized and has lost the Repeat state; rawKey() keeps it.
+    const bool flagged = event.rawKey().states().test(fcitx::KeyState::Repeat);
+    const bool repeat = sameKey && (flagged || now - hotkeyPressMs_ <= Controller::kRepeatGapMs);
+    if (repeat || key.checkKeyList(*config_.hotkey)) {
+        hotkeyCode_ = key.code();
         hotkeySym_ = key.sym();
+        hotkeyPressMs_ = now;
         auto *ic = event.inputContext();
         // The controller shows the first status before it calls callStart().
         if (controller_.idle()) sessionIc_ = ic->watch();
-        swallow = controller_.hotkeyPress(nowMs(), eligible(ic), key.isModifier());
+        swallow = controller_.hotkeyPress(now, eligible(ic), key.isModifier(), flagged);
     } else if (key.sym() == FcitxKey_Escape) {
         swallow = controller_.escape();
         escapeDown_ = swallow;
-    } else {
+    } else if (!key.isModifier()) {
+        // A modifier alone is not "another key": it may be the start of a
+        // combination hotkey that stops a tap-mode session.
+        if (sameKey) {
+            hotkeyCode_ = 0;
+            hotkeySym_ = FcitxKey_None;
+        }
         swallow = controller_.otherKeyPress();
     }
     if (swallow) event.filterAndAccept();

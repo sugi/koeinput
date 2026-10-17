@@ -25,6 +25,16 @@ Message DaemonClient::methodCall(const char *method) {
     return bus_.createMethodCall(kBusName, kObjectPath, kInterface, method);
 }
 
+void DaemonClient::activate() {
+    auto message = bus_.createMethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                         "org.freedesktop.DBus", "StartServiceByName");
+    message << std::string(kBusName) << uint32_t{0};
+    activateCall_ = message.callAsync(kStartTimeoutUsec, [this](Message &reply) {
+        if (reply.isError() && cb_.activateFailed) cb_.activateFailed(reply.errorMessage());
+        return true;
+    });
+}
+
 void DaemonClient::start() {
     auto message = methodCall("Start");
     // An empty a{sv}, written without dbus::Variant: fcitx5 5.0 does not install

@@ -241,7 +241,86 @@ int main() {
                   [&] {
                       committed(6);
                       displayClear(ic());
+                  })
+            // Control released first: the auto-repeat arrives as a bare space.
+            .then(0, "plain hotkey repeat: press Control+space",
+                  [&] { KI_CHECK(send("Control+space", false)); })
+            .then(700, "plain hotkey repeat: bare space repeat is swallowed",
+                  [&] {
+                      KI_CHECK(send("space", false));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(700, "plain hotkey repeat: release", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "plain hotkey repeat: committed",
+                  [&] {
+                      committed(7);
+                      displayClear(ic());
+                  })
+            .then(0, "flagged repeat: press Control+space", [&] { KI_CHECK(send("Control+space", false)); })
+            .then(1200, "flagged repeat: bare space with the Repeat state is swallowed",
+                  [&] {
+                      KI_CHECK(sendKey(instance, uuid, Key(FcitxKey_space, KeyStates({KeyState::Repeat})),
+                                       false));
+                      KI_CHECK(ic()->inputPanel().auxUp().toString() == "Recording");
+                  })
+            .then(300, "flagged repeat: release", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "flagged repeat: committed",
+                  [&] {
+                      committed(8);
+                      displayClear(ic());
+                  })
+            .then(0, "lost release: press Control+space", [&] { KI_CHECK(send("Control+space", false)); })
+            .then(300, "lost release: esc cancels, no hotkey release",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(1100, "lost release: an ordinary space passes",
+                  [&] {
+                      KI_CHECK(!send("space", false));
+                      KI_CHECK(!send("space", true));
+                      committed(8);
+                      displayClear(ic());
+                  })
+            .then(0, "tap with Control+space: press", [&] { KI_CHECK(send("Control+space", false)); })
+            .then(100, "tap with Control+space: release space", [&] { KI_CHECK(send("space", true)); })
+            .then(1300, "tap with Control+space: Control passes, the next press stops",
+                  [&] {
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                      KI_CHECK(!send("Control_L", false));
+                      KI_CHECK(!send("Control_L", true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                      KI_CHECK(send("Control+space", false));
+                      KI_CHECK(send("space", true));
+                  })
+            .then(1500, "tap with Control+space: committed",
+                  [&] {
+                      committed(9);
+                      displayClear(ic());
                       setHotkey("Alt_R");
+                  })
+            // Real frontends give keycodes; Shift held at the release changes the
+            // sym and the states, so the release pairs by keycode.
+            .then(0, "keycode pairing: press Alt_R with a keycode",
+                  [&] { KI_CHECK(sendKey(instance, uuid, Key(FcitxKey_Alt_R, KeyStates(), 108), false)); })
+            .then(1400, "keycode pairing: release Alt+Shift+Meta_R with the same keycode",
+                  [&] {
+                      KI_CHECK(sendKey(instance, uuid,
+                                       Key(FcitxKey_Meta_R, KeyStates({KeyState::Alt, KeyState::Shift}), 108),
+                                       true));
+                  })
+            .then(1500, "keycode pairing: committed",
+                  [&] {
+                      committed(10);
+                      displayClear(ic());
+                  })
+            // Without keycodes, Shift held at the release still pairs by sym.
+            .then(0, "sym pairing: press Alt_R", [&] { KI_CHECK(send("Alt_R", false)); })
+            .then(1400, "sym pairing: release Alt+Shift+Alt_R", [&] { KI_CHECK(send("Alt+Shift+Alt_R", true)); })
+            .then(1500, "sym pairing: committed",
+                  [&] {
+                      committed(11);
+                      displayClear(ic());
                   })
             .then(0, "daemon killed: press",
                   [&] {
@@ -251,7 +330,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(6);
+                      committed(11);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -261,7 +340,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(7);
+                committed(12);
                 displayClear(ic());
             });
     } else {
