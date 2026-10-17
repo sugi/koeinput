@@ -1,6 +1,10 @@
+pub mod audio;
 pub mod config;
 pub mod models;
 pub mod postprocess;
+pub mod recognizer;
+#[cfg(any(test, feature = "test-hooks"))]
+pub mod testing;
 
 pub const SAMPLE_RATE: u32 = 16000;
 
