@@ -23,7 +23,8 @@ So the core value of this project is to commit text through the input method, wi
 ## Scope and constraints
 
 - **Decided**: Local only. Nothing is sent to cloud speech recognition or cloud LLMs.
-- **Decided**: Japanese first.
+- **Decided**: Japanese first. The first release supports Japanese only.
+- **Decided**: Ship as a Debian package first, then RPM and other formats that fit.
 - **Decided**: Integrate as an fcitx5 addon (module), not as an engine.
   An engine would be exclusive with Mozc; an addon can commit and show preedit while Mozc stays active.
 - **Decided**: Write both the addon (C++) and the daemon ourselves. See [Rejected: fcitx5-vinput](#rejected-fcitx5-vinput).
@@ -168,6 +169,9 @@ Measured on 2026-10-17:
 - **Decided**: Store the data under `work/` in this repository, excluded from git by `.gitignore`, with mode 0700.
   Keep it until it is deleted by hand.
 - **Decided**: Measure latency fairly by replaying saved audio through each model one at a time.
+- **Decided** (2026-10-17): Strict evaluation is not needed now, because models can be changed later.
+  Reference text for free-speech items is optional; check them only for clearly wrong Japanese.
+  The evaluation scripts stay as developer tools and are not part of the packages.
 
 ### Metrics
 
@@ -229,13 +233,9 @@ Notes:
 ## Plan
 
 1. Done: write this document.
-2. Record the evaluation data.
-3. Spike: measure the candidates on CPU.
-   Output: a results table and a recommendation for the daemon's language, runtime and model setup (one model or two).
-4. Write the spec for the daemon and the CLI, including the evaluation CLI (record, correct, replay).
-5. Build the minimal fcitx5 addon: hotkey, then commit.
-   Before that, verify how to make Mozc commit and that key release events arrive.
-6. Add partial results, the dictionary and the remaining details.
+2. Done: record the evaluation data (42 of 43 items; s07 had no speech).
+3. Spike: measure the candidates on CPU. Summarize the current run only.
+4. From here on, follow the milestones in [the overall design](superpowers/specs/2026-10-17-overall-design.md).
 
 ## Open items
 
