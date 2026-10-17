@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use koeinput_core::SAMPLE_RATE;
 use koeinput_core::build::load_engine;
 use koeinput_core::config::{Paths, load};
@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub fn run(paths: &Paths, partials: bool, files: &[PathBuf]) -> Result<()> {
-    let cfg = load(&paths.config_file)?;
+    let cfg = load(&paths.config_file)
+        .with_context(|| format!("reading {}", paths.config_file.display()))?;
     let (engine, _) = load_engine(paths, &cfg).map_err(|e| anyhow!("{e}"))?;
     run_batch(files, |f| transcribe_file(&engine, partials, f))
 }
@@ -19,13 +20,24 @@ fn run_batch(files: &[PathBuf], mut each: impl FnMut(&Path) -> Result<()>) -> Re
     for f in files {
         if let Err(e) = each(f) {
             failed += 1;
-            eprintln!("{}: {e:#}", f.display());
+            eprintln!("{}", failure_line(f, &e));
         }
     }
     if failed > 0 {
         return Err(anyhow!("{failed} of {} files failed", files.len()));
     }
     Ok(())
+}
+
+/// Audio errors already name the file; other errors do not.
+fn failure_line(f: &Path, e: &anyhow::Error) -> String {
+    let name = f.display().to_string();
+    let msg = format!("{e:#}");
+    if msg.contains(&name) {
+        msg
+    } else {
+        format!("{name}: {msg}")
+    }
 }
 
 fn transcribe_file(engine: &Engine, partials: bool, f: &Path) -> Result<()> {
@@ -68,6 +80,15 @@ fn transcribe_file(engine: &Engine, partials: bool, f: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_line_names_the_file_once() {
+        let f = Path::new("x.wav");
+        let named = anyhow!("x.wav: No such file");
+        assert_eq!(failure_line(f, &named), "x.wav: No such file");
+        let bare = anyhow!("boom");
+        assert_eq!(failure_line(f, &bare), "x.wav: boom");
+    }
 
     #[test]
     fn transcribe_continues_after_bad_file() {

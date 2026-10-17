@@ -14,6 +14,8 @@ Each item names the milestone it belongs to.
   - Silero's 20 s maximum speech length splits long monologues mid-word.
   - Fillers are also removed inside longer words; judge this with real transcripts.
 
+- Model download: a download that stalls mid-body hangs `koeinput model install`. There is no idle timeout, and ureq 3 has no per-read timeout.
+
 ## M2 (fcitx5 addon)
 
 - `Final` is sent before the `done` state, but on separate signals. Base timing and commit logic on `Final` itself, not on the order in which a client happens to process the two.

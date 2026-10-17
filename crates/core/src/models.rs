@@ -203,7 +203,8 @@ fn stage(
 ) -> Result<(), ModelError> {
     let actual = match source {
         InstallSource::File(path) => {
-            let file = File::open(path)?;
+            let file = File::open(path)
+                .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display())))?;
             copy_hashed(file, partial, entry.size, ModelError::Io, progress)?
         }
         InstallSource::Url => {
@@ -435,6 +436,21 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("m.onnx")).unwrap(), b"onnx");
         assert!(dir.join("extra/x.txt").exists());
         assert!(e.is_installed(&models));
+    }
+
+    #[test]
+    fn missing_source_file_error_names_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let e = entry_for(b"x", "tar.bz2");
+        let src = tmp.path().join("nope.tar.bz2");
+        let err = install(
+            &e,
+            InstallSource::File(&src),
+            &tmp.path().join("models"),
+            &mut |_, _| {},
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("nope.tar.bz2"), "{err}");
     }
 
     #[test]

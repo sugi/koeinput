@@ -83,6 +83,8 @@ impl Config {
 }
 
 pub fn set_model(path: &Path, model_id: &str) -> Result<(), ConfigError> {
+    // Renaming over a symlink would replace it with a regular file.
+    let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -233,6 +235,21 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from("c.toml")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_model_keeps_a_symlinked_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("dotfiles/config.toml");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "threads = 2\n").unwrap();
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        set_model(&link, "x").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(load(&real).unwrap().model.as_deref(), Some("x"));
+        assert_eq!(load(&real).unwrap().threads, 2);
     }
 
     #[test]
