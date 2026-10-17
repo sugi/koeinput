@@ -38,7 +38,11 @@ pub struct Shared {
     pub model: String,
     pub source: Option<String>,
     pub test_source: bool,
+    pub loaded: tokio::sync::watch::Sender<bool>,
 }
+
+/// How long a Start waits for a model that is still loading, e.g. right after D-Bus activation.
+const LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
 
 pub struct Recognizer1 {
     pub shared: Arc<Mutex<Shared>>,
@@ -62,6 +66,14 @@ impl Recognizer1 {
             .to_owned();
         let emitter =
             SignalEmitter::new(conn, OBJECT_PATH)?.set_destination(BusName::Unique(owner.clone()));
+        let mut loaded = {
+            let s = self.shared.lock().unwrap();
+            matches!(s.readiness, Readiness::Loading).then(|| s.loaded.subscribe())
+        };
+        if let Some(rx) = loaded.as_mut() {
+            // Only the outcome matters: the check below reports a timeout as "still loading".
+            let _ = tokio::time::timeout(LOAD_WAIT, rx.wait_for(|done| *done)).await;
+        }
         let (id, handle) = {
             let mut s = self.shared.lock().unwrap();
             if s.current.is_some() {

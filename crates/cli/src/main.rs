@@ -2,7 +2,7 @@ mod listen;
 mod model_cmd;
 mod transcribe;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -30,6 +30,9 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ModelCmd,
     },
+    /// Print the man page in roff format.
+    #[command(hide = true)]
+    Manpage,
 }
 
 #[derive(Subcommand)]
@@ -61,6 +64,9 @@ fn main() -> std::process::ExitCode {
         Cmd::Listen => listen::run(),
         Cmd::Status => listen::status(),
         Cmd::Transcribe { partials, files } => transcribe::run(&paths, partials, &files),
+        Cmd::Manpage => clap_mangen::Man::new(Cli::command())
+            .render(&mut std::io::stdout())
+            .map_err(Into::into),
         Cmd::Model { cmd } => match cmd {
             ModelCmd::List => model_cmd::list(&paths),
             ModelCmd::Install { id, from_file } => {

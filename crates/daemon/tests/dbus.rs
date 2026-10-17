@@ -320,3 +320,49 @@ async fn loader_panic_is_reported_instead_of_loading_forever() {
     assert!(msg.contains("org.nemui.KoeInput.Error.NoModel"), "{msg}");
     assert!(msg.contains("model loading failed"), "{msg}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_waits_for_a_loading_model() {
+    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "1000")]).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    let t = std::time::Instant::now();
+    let id = p.start(HashMap::new()).await.unwrap();
+    let waited = t.elapsed();
+    assert!(waited >= Duration::from_millis(700), "{waited:?}");
+    assert!(waited < Duration::from_secs(3), "{waited:?}");
+    p.cancel(id).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_gives_up_after_four_seconds() {
+    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "6000")]).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    let t = std::time::Instant::now();
+    let msg = p.start(HashMap::new()).await.unwrap_err().to_string();
+    let waited = t.elapsed();
+    assert!(msg.contains("org.nemui.KoeInput.Error.NoModel"), "{msg}");
+    assert!(msg.contains("still loading"), "{msg}");
+    assert!(
+        waited >= Duration::from_millis(3500) && waited <= Duration::from_secs(5),
+        "{waited:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ready_answers_during_a_waiting_start() {
+    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "3000")]).await;
+    let caller = zbus::Connection::session().await.unwrap();
+    let waiting = tokio::spawn(async move {
+        let p = Recognizer1Proxy::new(&caller).await.unwrap();
+        p.start(HashMap::new()).await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    let ready = timeout(Duration::from_millis(500), p.ready())
+        .await
+        .expect("Ready did not answer during a waiting Start")
+        .unwrap();
+    assert!(!ready);
+    let id = waiting.await.unwrap().unwrap();
+    p.cancel(id).await.unwrap();
+}
