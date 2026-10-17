@@ -10,6 +10,7 @@ test-hooks = []
 
 [dependencies]
 bzip2 = "0.6.1"
+crossbeam-channel = "0.5.17"
 hex = "0.4.3"
 hound = "3.5.1"
 libpulse-binding = "2.30.1"
