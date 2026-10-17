@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod build;
 pub mod config;
 pub mod engine;
 pub mod models;
