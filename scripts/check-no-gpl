@@ -11,6 +11,19 @@ if [ $# -eq 0 ]; then
 fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# Returns grep's status for a match (0) or none (1); a grep error stops the check.
+search() {
+  rc=0
+  grep -E "$1" "$2" >"$3" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "$bin: grep failed with status $rc; cannot check" >&2
+    exit 2
+  fi
+  return "$rc"
+}
+
 status=0
 for bin in "$@"; do
   if ! nm -C --defined-only "$bin" >"$tmp/syms" 2>"$tmp/err"; then
@@ -22,8 +35,15 @@ for bin in "$@"; do
     echo "$bin: no symbol table (stripped?); cannot check" >&2
     exit 2
   fi
-  sed 's/^[0-9a-fA-F]* [A-Za-z] //' "$tmp/syms" | grep -E 'espeak_|ucd_|piper::' | sort -u >"$tmp/found"
-  if [ -s "$tmp/found" ]; then
+  sed 's/^[0-9a-fA-F]* [A-Za-z] //' "$tmp/syms" >"$tmp/names"
+  # Without sherpa-onnx symbols the binary is not the one meant, or the symbol
+  # names no longer look as this check expects; either way a pass would mean nothing.
+  if ! search 'sherpa_onnx|SherpaOnnx' "$tmp/names" /dev/null; then
+    echo "$bin: no sherpa-onnx symbols; cannot check" >&2
+    exit 2
+  fi
+  if search 'espeak_|ucd_|piper::' "$tmp/names" "$tmp/hits"; then
+    sort -u "$tmp/hits" >"$tmp/found"
     echo "$bin: GPL symbols found ($(wc -l <"$tmp/found")):"
     sed 's/^/  /' "$tmp/found"
     status=1
