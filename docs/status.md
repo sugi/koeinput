@@ -73,10 +73,14 @@ Later decisions that are still open: the project license (before the first relea
 
 - **Host:** Debian testing (kernel `7.2.9+deb14`), KDE Plasma on Wayland, fcitx5 with Mozc, PipeWire.
   CPU Intel Core i9-12900T (no NPU), iGPU UHD 770, 125 GiB RAM. Default microphone: DJI Wireless Mic Rx (USB).
-- **Dev container** (where Claude Code runs): Debian 13, container ID `df93830564b5`, user `sugi` (uid 1000), no root, no -dev packages, no `/dev/dri`.
+- **Dev container** (where Claude Code runs): Debian 13, user `sugi` (uid 1000), no root, no -dev packages, no `/dev/dri`.
   - It shares only three sockets with the host: the session bus (`/run/user/1000/bus`), PulseAudio (`/run/user/1000/pulse/native`, `PULSE_SERVER` is set) and `wayland-0`. There is no PipeWire native socket, which is why capture uses the PulseAudio API.
-  - The repository and `work/` live on the container's own filesystem, not on a host mount. `/tmp` is wiped when the container restarts; `work/` survives a restart but not a re-creation of the container.
-  - To get a shell from a host terminal: `docker exec -it -u sugi -w /home/sugi/works/git/nemui/voice-flood df93830564b5 bash`.
+  - It is started with `--rm`, so everything outside bind mounts disappears when it stops, including `/tmp`.
+  - Bind-mounted from the host, so it survives (checked with `findmnt` on 2026-10-18):
+    - the repository `/home/sugi/works/git/nemui/voice-flood`, including `work/` and `target/`;
+    - the podman storage `~/.local/share/containers` (the build image and its layers);
+    - `~/.cargo`, `~/.rustup` and `~/.claude`.
+  - The container ID changes on every start. To get a shell from a host terminal, find it with `docker ps`, then run `docker exec -it -u sugi -w /home/sugi/works/git/nemui/voice-flood <container> bash`.
 
 ### Building
 
@@ -88,7 +92,7 @@ Later decisions that are still open: the project license (before the first relea
 
 | Path | Content |
 |---|---|
-| `work/eval-data/` | The user's own recordings and references (`references.jsonl`, `audio/`, `rejected/`, `extra/`). Never commit; never quote transcripts in docs. Re-recording costs the user time, so consider a backup outside the container. |
+| `work/eval-data/` | The user's own recordings and references (`references.jsonl`, `audio/`, `rejected/`, `extra/`). Never commit; never quote transcripts in docs. |
 | `work/models/` | Spike models (13 GB) and their original archives in `_dl/` |
 | `work/models-test/` | Relative symlinks `parakeet-ja` and `silero-vad` for opt-in model tests (`KOEINPUT_MODEL_TESTS=1 KOEINPUT_TEST_MODELS_DIR=/src/work/models-test`) |
 | `work/home/` | A `HOME` with parakeet-ja and silero-vad installed through `koeinput model install`; used to run the daemon by hand |
