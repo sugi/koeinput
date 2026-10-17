@@ -140,6 +140,8 @@ int main() {
                   KI_CHECK(has("left"));
                   log.clear();
                   id.reset();
+                  // No owner now: a daemon-shaped signal must be rejected.
+                  forgeState(1, "forged");
                   daemon.emplace(std::vector<std::pair<std::string, std::string>>{
                       {"KOEINPUT_TEST_PANIC", "1"}});
                   client.start();
@@ -149,6 +151,7 @@ int main() {
                   KI_CHECK(has("started"));
                   KI_CHECK(has("error internal"));
                   KI_CHECK(has("state error"));
+                  KI_CHECK(!has("state forged"));
                   log.clear();
                   daemon.reset();
                   daemon.emplace(DaemonProcess::notReady({{"KOEINPUT_TEST_NO_MODEL", "1"}}));

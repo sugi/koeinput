@@ -89,7 +89,6 @@ KoeInputAddon::KoeInputAddon(fcitx::Instance *instance)
         fcitx::EventType::InputContextDestroyed, fcitx::EventWatcherPhase::Default,
         [this](fcitx::Event &event) {
             auto &e = static_cast<fcitx::InputContextEvent &>(event);
-            if (e.inputContext() == pressIc_) pressIc_ = nullptr;
             if (e.inputContext() == sessionIc_.get()) {
                 // The context is going away: drop it before the controller clears the display.
                 sessionIc_.unwatch();
@@ -129,23 +128,31 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
 void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     const auto &key = event.key();
     bool swallow = false;
-    if (key.checkKeyList(*config_.hotkey)) {
-        if (event.isRelease()) {
+    if (event.isRelease()) {
+        const bool pressedHotkey = hotkeySym_ != FcitxKey_None && key.sym() == hotkeySym_;
+        if (pressedHotkey || key.checkKeyList(*config_.hotkey)) {
+            hotkeySym_ = FcitxKey_None;
             swallow = controller_.hotkeyRelease(nowMs());
-        } else {
-            pressIc_ = event.inputContext();
-            swallow = controller_.hotkeyPress(nowMs(), eligible(pressIc_), key.isModifier());
+        } else if (key.sym() == FcitxKey_Escape && escapeDown_) {
+            escapeDown_ = false;
+            swallow = true;
         }
-    } else if (!event.isRelease()) {
-        swallow = key.sym() == FcitxKey_Escape ? controller_.escape() : controller_.otherKeyPress();
+    } else if (key.checkKeyList(*config_.hotkey)) {
+        hotkeySym_ = key.sym();
+        auto *ic = event.inputContext();
+        // The controller shows the first status before it calls callStart().
+        if (controller_.idle()) sessionIc_ = ic->watch();
+        swallow = controller_.hotkeyPress(nowMs(), eligible(ic), key.isModifier());
+    } else if (key.sym() == FcitxKey_Escape) {
+        swallow = controller_.escape();
+        escapeDown_ = swallow;
+    } else {
+        swallow = controller_.otherKeyPress();
     }
     if (swallow) event.filterAndAccept();
 }
 
-void KoeInputAddon::callStart() {
-    sessionIc_ = pressIc_ ? pressIc_->watch() : fcitx::TrackableObjectReference<fcitx::InputContext>();
-    client_->start();
-}
+void KoeInputAddon::callStart() { client_->start(); }
 
 void KoeInputAddon::callStop(uint32_t id) { client_->stop(id); }
 
@@ -162,7 +169,11 @@ void KoeInputAddon::showPartial(const std::string &text) {
     auto *ic = sessionIc_.get();
     if (!ic) return;
     if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
-        ic->inputPanel().setClientPreedit(fcitx::Text(text, fcitx::TextFormatFlag::Underline));
+        // DontCommit: fcitx5 would otherwise commit the client preedit on focus out.
+        fcitx::Text preedit(text, fcitx::TextFormatFlags(
+                                      {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::DontCommit}));
+        preedit.setCursor(static_cast<int>(text.size()));
+        ic->inputPanel().setClientPreedit(preedit);
         ic->updatePreedit();
     } else {
         ic->inputPanel().setPreedit(fcitx::Text(text));

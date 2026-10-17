@@ -48,8 +48,11 @@ private:
     KoeInputConfig config_;
     Controller controller_;
     std::unique_ptr<DaemonClient> client_;
-    fcitx::InputContext *pressIc_ = nullptr;
     fcitx::TrackableObjectReference<fcitx::InputContext> sessionIc_;
+    // Sym of the last hotkey press, so its release pairs even when the
+    // modifiers were released first (Control+space released as space).
+    fcitx::KeySym hotkeySym_ = FcitxKey_None;
+    bool escapeDown_ = false;
     std::unique_ptr<fcitx::EventSourceTime> timer_;
     std::vector<std::unique_ptr<fcitx::HandlerTableEntry<fcitx::EventHandler>>> watchers_;
     uint32_t notificationId_ = 0;
