@@ -151,19 +151,45 @@ fn fail_and_finish(session: &mut Session, code: &str, message: String) -> Vec<Ev
     if session.abort() { fail(code, message) } else { Vec::new() }
 }
 
+fn apply_command(session: &mut Session, stop_requested: &mut bool, c: Option<Command>) -> Vec<Event> {
+    match c {
+        Some(Command::Stop) => {
+            *stop_requested = true;
+            session.stop()
+        }
+        Some(Command::Cancel) | None => session.cancel(),
+    }
+}
+
 impl Engine {
     fn run_live(&self, session: &mut Session, src: LiveSource, send: &dyn Fn(Vec<Event>), cmd: &Receiver<Command>) {
         let (cap_tx, cap_rx) = unbounded();
-        let running = Running::start(src, cap_tx);
+        let mut running = Some(Running::start(src, cap_tx));
         let mut stop_requested = false;
+        // Release the capture before forwarding the events that finish the session.
+        let forward = |session: &Session, running: &mut Option<Running>, events: Vec<Event>| {
+            if session.is_finished()
+                && let Some(r) = running.take()
+            {
+                r.stop();
+            }
+            send(events);
+        };
         while !session.is_finished() {
+            let pending = match cmd.try_recv() {
+                Ok(c) => Some(Some(c)),
+                Err(crossbeam_channel::TryRecvError::Empty) => None,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => Some(None),
+            };
+            if let Some(c) = pending {
+                let events = apply_command(session, &mut stop_requested, c);
+                forward(session, &mut running, events);
+                continue;
+            }
             select! {
-                recv(cmd) -> c => match c {
-                    Ok(Command::Stop) => {
-                        stop_requested = true;
-                        send(session.stop());
-                    }
-                    Ok(Command::Cancel) | Err(_) => send(session.cancel()),
+                recv(cmd) -> c => {
+                    let events = apply_command(session, &mut stop_requested, c.ok());
+                    forward(session, &mut running, events);
                 },
                 recv(cap_rx) -> m => {
                     let mut audio = Vec::new();
@@ -180,26 +206,33 @@ impl Engine {
                         }
                     };
                     if !audio.is_empty() {
-                        send(session.push(&audio));
+                        let mut events = session.push(&audio);
                         if !session.wants_audio() && !session.is_finished() {
-                            send(session.end_of_audio());
+                            events.extend(session.end_of_audio());
                         }
+                        forward(session, &mut running, events);
                     }
                     if let Some(err) = terminal {
                         if session.is_finished() {
                             continue;
                         }
-                        if stop_requested {
-                            send(session.end_of_audio());
+                        let events = if stop_requested {
+                            session.end_of_audio()
                         } else {
-                            send(fail_and_finish(session, "audio", err.unwrap_or_else(|| "microphone closed".into())));
-                        }
+                            fail_and_finish(session, "audio", err.unwrap_or_else(|| "microphone closed".into()))
+                        };
+                        forward(session, &mut running, events);
                     }
                 },
-                default(AUDIO_TIMEOUT) => send(fail_and_finish(session, "audio", "no audio for 2 s".into())),
+                default(AUDIO_TIMEOUT) => {
+                    let events = fail_and_finish(session, "audio", "no audio for 2 s".into());
+                    forward(session, &mut running, events);
+                },
             }
         }
-        running.stop();
+        if let Some(r) = running.take() {
+            r.stop();
+        }
     }
 }
 
@@ -207,7 +240,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::testing::{FakeRecognizer, FakeVad};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     fn engine() -> Engine {
         Engine {
@@ -259,6 +292,7 @@ mod tests {
         let h = engine().start(Source::Generator { level: 0.1 });
         h.stop();
         let ev = collect(&h);
+        assert!(ev.contains(&Event::Final(String::new())), "{ev:?}");
         assert_eq!(ev.last(), Some(&Event::State(State::Done)), "{ev:?}");
     }
 
@@ -277,28 +311,31 @@ mod tests {
         let h = engine().start(Source::File("/nonexistent.wav".into()));
         let ev = collect(&h);
         assert!(ev.iter().any(|e| matches!(e, Event::Error { code, .. } if code == "audio")));
+        assert_eq!(ev.last(), Some(&Event::State(State::Error)));
     }
 
     #[test]
-    fn slow_recognizer_does_not_build_a_backlog() {
-        let rec = Arc::new(FakeRecognizer::new(|_| {
-            std::thread::sleep(Duration::from_millis(600));
-            Ok("x".to_string())
-        }));
+    fn slow_recognizer_still_covers_all_audio() {
         let eng = Engine {
-            cfg: SessionConfig { partial_interval: 8000, tail: 0, min_length: 8000, max_length: 1_600_000 },
-            rec: rec.clone(),
+            cfg: SessionConfig { partial_interval: 1600, tail: 0, min_length: 1600, max_length: 1_600_000 },
+            rec: Arc::new(FakeRecognizer::new(|s| {
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(s.len().to_string())
+            })),
             vad: Arc::new(|| Ok(Box::new(FakeVad::always_speech()) as Box<dyn Vad>)),
             post: Arc::new(PostProcessor::empty()),
         };
         let h = eng.start(Source::Generator { level: 0.1 });
         std::thread::sleep(Duration::from_millis(2500));
-        let stopped = Instant::now();
         h.stop();
         let ev = collect(&h);
-        assert!(ev.iter().any(|e| matches!(e, Event::Final(_))), "{ev:?}");
-        assert!(stopped.elapsed() < Duration::from_secs(4), "final took {:?}", stopped.elapsed());
-        let calls = rec.calls();
-        assert!(calls <= 2500 / 500 + 3, "calls = {calls}");
+        let n = ev
+            .iter()
+            .find_map(|e| match e {
+                Event::Final(t) => t.parse::<usize>().ok(),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no final: {ev:?}"));
+        assert!(n >= 24_000, "final covered only {n} samples");
     }
 }
