@@ -43,7 +43,7 @@ Out of scope for the first release:
 
 | Component | Language | Job |
 |---|---|---|
-| addon | C++ | fcitx5 module. Hotkey, committing Mozc's composition, recording indicator, partial display, committing the final text. Nothing else. |
+| addon | C++ | fcitx5 module. Hotkey, recording indicator, partial display, committing the final text. Nothing else. |
 | daemon | Rust | Audio capture, VAD, recognition, partial-result scheduling, output clean-up, dictionary, model loading, D-Bus service. |
 | CLI | Rust | Talks to the daemon (listen, status), transcribes WAV files, installs and selects models. |
 | core | Rust library | Audio pipeline, VAD, recognizer backends and clean-up, shared by the daemon, the CLI and developer tools. |
@@ -93,7 +93,8 @@ The M1 spec fixes the details.
 
 ## 5. Session flow
 
-1. The user presses the hotkey. The addon commits Mozc's composition, if there is one, then calls `Start`.
+1. The user presses the hotkey. The addon calls `Start`.
+   If Mozc is composing, the addon either does not start or leaves the composition as it is (the M2 spec picks one).
 2. The addon shows "preparing". The daemon opens the capture stream with about 20 ms latency.
 3. When the first audio arrives, the daemon sends `recording` and the addon shows the recording indicator.
 4. While the user speaks, the daemon decodes the current VAD segment again every 0.5 s and sends `Partial`.
@@ -163,7 +164,8 @@ Installing to system paths also removes the open question about how fcitx5 finds
 - Package builds run offline:
   - Rust crates come from `cargo vendor`.
   - The sherpa-onnx archive is pinned by checksum and passed with `SHERPA_ONNX_ARCHIVE_DIR`.
-- The addon depends on the fcitx5 ABI, so it is built separately for each distribution release, in a container for that release.
+- The addon supports every fcitx5 5.x (see decisions.md). The core library soname has been `libfcitx5core7` from 5.0.5 to 5.1.23.
+  Packages are still built per distribution release, as usual, and the package dependency comes from the libraries actually used.
   Targets: Debian 13 and Debian testing (the user's host) first, then Ubuntu LTS, then Fedora.
 - `postinst` does not download anything. After installation, the user runs `<name> model install`.
   If no model is installed, the addon shows a notification with that command.
@@ -178,16 +180,16 @@ Each milestone starts with its own spec and implementation plan.
 |---|---|---|
 | M0. Spike summary | Short results document; default model fixed | The current benchmark run is summarized. No further measurement. |
 | M1. Daemon and CLI | Rust workspace; capture, VAD, sherpa-onnx backend, partial scheduling, D-Bus service, WAV file input; `<name> listen` prints partial and final text in a terminal | Dictation works end to end from the CLI on the host session bus. Tests pass on WAV fixtures. |
-| M2. Minimal addon | fcitx5 module: hotkey, Mozc commit, indicator, final commit; installed on the host with a local `.deb` | Dictation works in WezTerm, Chrome, Firefox, Emacs and Discord. |
+| M2. Minimal addon | fcitx5 module: hotkey, indicator, final commit; installed on the host with a local `.deb` built in the Debian 13 container | Dictation works in WezTerm, Chrome, Firefox, Emacs and Discord. |
 | M3. Debian packaging | Proper source package with two binary packages, offline build, model install command, lintian mostly clean | Clean install on a fresh Debian 13 container and on the host. Daily use starts here. |
 | M4. Quality | Partial display (inline preedit or panel), output clean-up, user dictionary, optional final-stage model, latency under CPU load | The user's daily pain points are fixed. |
 | M5. More formats and release | RPM spec, PKGBUILD, CI, release steps, README and install guide, license and model attribution | Packages build for every target from one tag. |
 
-**To verify** before M2 starts (small throwaway tests):
+No separate tests are needed before M2:
 
-- How another addon can make Mozc commit its composition.
-- That key release events arrive reliably through KWin on Wayland.
-- The host's fcitx5 version, and a container that matches it for building the addon.
+- Committing Mozc's composition is not required.
+- Key release is detected the same way vinput does, and M2 confirms it works.
+- The host's fcitx5 version does not matter within 5.x.
 
 ## 9. Testing
 
@@ -203,8 +205,7 @@ Each milestone starts with its own spec and implementation plan.
 
 | Risk | Effect | Plan |
 |---|---|---|
-| Mozc cannot be told to commit from another addon | Partial results overwrite Mozc's composition | Verify before M2. Fallback: send a key event, or refuse to start while Mozc is composing. |
-| fcitx5 ABI changes between releases | The addon fails to load after an fcitx5 upgrade | Build per release. Use a strict version dependency on fcitx5. |
+| fcitx5 changes its binary interface within 5.x | The addon fails to load after an fcitx5 upgrade | CI builds against the oldest and newest 5.x. The package depends on the soname, so a new soname blocks the install. |
 | `pipewire` crate not mature enough | Capture code takes longer | Fall back to the PulseAudio API. |
 | sherpa-onnx prebuilt archive changes or disappears | Builds break | Pin by checksum and keep a local copy. Building from source against Debian's ONNX Runtime is the long-term option. |
 | Inline preedit renders badly in terminals or Emacs | Partial results are hard to read | Decide in M4. Option to show partial results in the fcitx5 panel instead. |

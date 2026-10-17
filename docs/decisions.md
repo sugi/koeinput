@@ -64,7 +64,7 @@ Mistakes to avoid:
 - Forcing the SurroundingText capability on every input context.
 - Broadcasting transcripts as signals that every process on the session bus receives.
 - Showing "recording" before audio actually arrives.
-- Overwriting Mozc's preedit without committing Mozc's composition first.
+- Overwriting Mozc's preedit while Mozc is composing.
 
 ## Hardware and environment
 
@@ -77,7 +77,7 @@ Measured on 2026-10-17:
 - Host desktop: KDE Plasma on Wayland, fcitx5 with Mozc.
   Apps connected to fcitx5: WezTerm, Chrome, Firefox, Emacs, Discord.
 - Dev container: Debian 13. The host runs a newer Debian (kernel `7.2.9+deb14`).
-  The addon must be built against the host's fcitx5 version.
+  The host's fcitx5 version does not need to be known in advance. See [fcitx5 versions](#fcitx5-versions).
   A daemon built in the container should run on the host, because glibc is backward compatible.
 
 ## Recording behavior
@@ -88,7 +88,9 @@ Measured on 2026-10-17:
 - **Decided**: Show visual feedback while recording.
   Switch to "recording" when the first audio data arrives, not when the key is pressed.
   The device takes time to wake up, and the user should start speaking only after the indicator changes.
-- **Decided**: If Mozc is composing text when the hotkey is pressed, commit that text first.
+- **Decided** (revised 2026-10-17): Committing Mozc's composition is not required.
+  If Mozc is composing when the hotkey is pressed, either do not start recording, or leave the composition as it is.
+  The M2 spec picks one.
 - **Recommended**: Keep recording for 0.2 to 0.3 s after the key is released, so the last syllable is not cut off.
   This adds to the final latency. Check the right length with the evaluation data.
 - **Decided**: Ask for a small capture latency (for example 20 ms).
@@ -134,14 +136,25 @@ Measured on 2026-10-17:
 
 - **Recommended**: Keep the addon minimal: hotkey, preedit, commit and asynchronous D-Bus calls. Everything else goes in the daemon.
   An addon crash stops all typing.
-- **To verify**: How another addon can make Mozc commit its composition.
-  If the fcitx5 API cannot do it, a workaround such as sending a key is needed.
-- **To verify**: Key release events arrive reliably through KWin on Wayland.
+- **Decided**: Detect key release the same way vinput does: release events in an event watcher at the `PreInputMethod` phase.
+  No separate test beforehand; M2 confirms it. The code is our own.
 - **Open**: Which hotkey. A modifier-only key such as Right Alt, or 無変換 / 変換, which Mozc also uses.
 - **Open**: Where to show partial results: inline preedit, or the fcitx5 panel.
   Terminals and Emacs handle inline preedit differently.
 - **Open**: Cancel with Esc, a maximum recording length, and what to show when the daemon does not respond.
 - **Open**: Undo of the last commit. It depends on app support for surrounding text.
+
+## fcitx5 versions
+
+- **Decided**: Support every fcitx5 5.x release.
+- Verified on 2026-10-17 at packages.debian.org: the core library has kept the same soname (`libfcitx5core7`) from 5.0.5 (Debian 11) to 5.1.23 (Debian testing).
+  fcitx5 hides class internals behind private pointers, which keeps the binary interface stable within a soname.
+- **Recommended**: Write the addon against the 5.0 API.
+  Use newer APIs only behind compile-time version checks.
+  Build against the oldest supported release and the newest one in CI.
+- An addon built against an older 5.x should load in a newer 5.x.
+  So a package built in the Debian 13 container (5.1.12) can be installed on the host.
+  If the host ever moves to a new soname, the package dependency check refuses the install instead of failing at run time.
 
 ## Daemon
 
