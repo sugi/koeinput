@@ -3,6 +3,7 @@ pub mod config;
 pub mod models;
 pub mod postprocess;
 pub mod recognizer;
+pub mod session;
 pub mod vad;
 #[cfg(any(test, feature = "test-hooks"))]
 pub mod testing;
