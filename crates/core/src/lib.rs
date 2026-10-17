@@ -1,3 +1,5 @@
+pub mod config;
+
 pub const SAMPLE_RATE: u32 = 16000;
 
 #[cfg(test)]
