@@ -1,0 +1,13 @@
+[package]
+name = "koeinput-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "koeinput"
+path = "src/main.rs"
+
+[dependencies]
+koeinput-core = { path = "../core" }
