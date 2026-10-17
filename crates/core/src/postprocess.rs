@@ -14,7 +14,7 @@ pub struct PostProcessor {
 impl PostProcessor {
     pub fn new(mut dict: Vec<(String, String)>) -> Self {
         dict.retain(|(k, _)| !k.is_empty());
-        dict.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        dict.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
         Self { dict }
     }
 
@@ -91,10 +91,11 @@ fn remove_japanese_spaces(text: &str) -> String {
         if is_space(c) {
             let prev = chars[..i].iter().rev().find(|c| !is_space(**c));
             let next = chars[i + 1..].iter().find(|c| !is_space(**c));
-            if let (Some(p), Some(n)) = (prev, next) {
-                if is_japanese(*p) && is_japanese(*n) {
-                    continue;
-                }
+            if let (Some(p), Some(n)) = (prev, next)
+                && is_japanese(*p)
+                && is_japanese(*n)
+            {
+                continue;
             }
         }
         out.push(c);
@@ -105,10 +106,11 @@ fn remove_japanese_spaces(text: &str) -> String {
 pub fn join_segments(parts: &[String]) -> String {
     let mut out = String::new();
     for p in parts.iter().filter(|p| !p.is_empty()) {
-        if let (Some(l), Some(r)) = (out.chars().last(), p.chars().next()) {
-            if l.is_ascii_alphanumeric() && r.is_ascii_alphanumeric() {
-                out.push(' ');
-            }
+        if let (Some(l), Some(r)) = (out.chars().last(), p.chars().next())
+            && l.is_ascii_alphanumeric()
+            && r.is_ascii_alphanumeric()
+        {
+            out.push(' ');
         }
         out.push_str(p);
     }
