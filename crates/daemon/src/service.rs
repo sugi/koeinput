@@ -98,7 +98,10 @@ impl Recognizer1 {
                 tracing::info!(session = id, "client left during Start; cancelling");
                 handle.cancel();
             }
-            Err(e) => tracing::warn!(session = id, "cannot check the caller: {e}"),
+            Err(e) => {
+                tracing::warn!(session = id, "cannot check the caller; cancelling: {e}");
+                handle.cancel();
+            }
         }
         Ok(id)
     }

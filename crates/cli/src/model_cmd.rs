@@ -11,6 +11,10 @@ fn catalog(paths: &Paths) -> Result<Catalog> {
         .with_context(|| format!("reading {}", paths.catalog_file.display()))
 }
 
+fn mib(bytes: u64) -> String {
+    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+}
+
 fn entry<'a>(c: &'a Catalog, id: &str) -> Result<&'a ModelEntry> {
     c.get(id)
         .with_context(|| format!("unknown model {id}; see `koeinput model list`"))
@@ -26,9 +30,9 @@ pub fn list(paths: &Paths) -> Result<()> {
         };
         let default = if m.default { ", default" } else { "" };
         println!(
-            "{:<20} {:>7.0} MB  {}{}  {} [{}]",
+            "{:<20} {:>10}  {}{}  {} [{}]",
             m.id,
-            m.size as f64 / 1e6,
+            mib(m.size),
             state,
             default,
             m.name,
@@ -47,7 +51,7 @@ fn install_one(paths: &Paths, m: &ModelEntry, file: Option<&Path>) -> Result<()>
     install_model(m, source, &paths.models_dir, &mut |done, total| {
         if done - last >= 16 << 20 || done == total {
             last = done;
-            eprint!("\r{}: {} / {} MB", m.id, done >> 20, total >> 20);
+            eprint!("\r{}: {} / {}", m.id, mib(done), mib(total));
         }
     })
     .with_context(|| format!("installing {}", m.id))?;
@@ -86,4 +90,16 @@ pub fn use_model(paths: &Paths, id: &str) -> Result<()> {
     set_model(&paths.config_file, id)?;
     println!("model set to {id}; restart the daemon to use it (systemctl --user restart koeinput)");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mib_uses_one_decimal_place() {
+        assert_eq!(mib(1572864), "1.5 MiB");
+        assert_eq!(mib(0), "0.0 MiB");
+        assert_eq!(mib(489389564), "466.7 MiB");
+    }
 }
