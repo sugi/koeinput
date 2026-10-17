@@ -303,6 +303,7 @@ mod tests {
                 tail: 4000,
                 min_length: 8000,
                 max_length: 160_000,
+                final_full_max: 480_000,
             },
             rec: Arc::new(FakeRecognizer::new(|s| Ok(format!("{}", s.len() / 16000)))),
             vad: Arc::new(|| Ok(Box::new(FakeVad::always_speech()) as Box<dyn Vad>)),
@@ -408,6 +409,7 @@ mod tests {
                 tail: 0,
                 min_length: 1600,
                 max_length: 1_600_000,
+                final_full_max: 480_000,
             },
             rec: Arc::new(FakeRecognizer::new(|s| {
                 std::thread::sleep(Duration::from_millis(300));
