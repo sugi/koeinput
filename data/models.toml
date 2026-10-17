@@ -1,0 +1,74 @@
+# Model catalog. `files` maps roles to paths inside the installed model directory.
+# Archives are extracted with `archive_root` stripped.
+
+[[model]]
+id = "parakeet-ja"
+name = "NVIDIA Parakeet TDT-CTC 0.6B Japanese (int8)"
+kind = "nemo_ctc"
+default = true
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8.tar.bz2"
+sha256 = "4b0a800ef29f4f4c8667339bf6f60d5bfdc2852ddc9dc5741aea65b6f8d1306b"
+size = 489389564
+license = "CC-BY-4.0"
+format = "tar.bz2"
+archive_root = "sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
+files = { model = "model.int8.onnx", tokens = "tokens.txt" }
+
+[[model]]
+id = "zipformer-ja"
+name = "ReazonSpeech Zipformer (k2 v2, int8)"
+kind = "transducer"
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01.tar.bz2"
+sha256 = "e0981d0d5d7b446d41010831b59091ebf57d2aa7b79980f67ca37af460b5842d"
+size = 713097333
+license = "Apache-2.0"
+format = "tar.bz2"
+archive_root = "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01"
+files = { encoder = "encoder-epoch-99-avg-1.int8.onnx", decoder = "decoder-epoch-99-avg-1.int8.onnx", joiner = "joiner-epoch-99-avg-1.int8.onnx", tokens = "tokens.txt" }
+
+[[model]]
+id = "sensevoice-2024"
+name = "SenseVoice Small 2024-07-17 (int8)"
+kind = "sense_voice"
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2"
+sha256 = "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e"
+size = 163002883
+license = "FunASR Model License"
+format = "tar.bz2"
+archive_root = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+files = { model = "model.int8.onnx", tokens = "tokens.txt" }
+
+[[model]]
+id = "qwen3-asr-0.6b"
+name = "Qwen3-ASR 0.6B (int8)"
+kind = "qwen3"
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
+sha256 = "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96"
+size = 878702423
+license = "Apache-2.0"
+format = "tar.bz2"
+archive_root = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+files = { conv_frontend = "conv_frontend.onnx", encoder = "encoder.int8.onnx", decoder = "decoder.int8.onnx", tokenizer = "tokenizer" }
+
+[[model]]
+id = "cohere-transcribe"
+name = "Cohere Transcribe 03-2026 (int8)"
+kind = "cohere"
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-cohere-transcribe-14-lang-int8-2026-04-01.tar.bz2"
+sha256 = "bd582588d50685a795dcd2807ab77e11361b8312d96c53884682def45ab4206d"
+size = 1699791751
+license = "Apache-2.0"
+format = "tar.bz2"
+archive_root = "sherpa-onnx-cohere-transcribe-14-lang-int8-2026-04-01"
+files = { encoder = "encoder.int8.onnx", decoder = "decoder.int8.onnx", tokens = "tokens.txt" }
+
+[[model]]
+id = "silero-vad"
+name = "Silero VAD"
+kind = "vad"
+url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+sha256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+size = 643854
+license = "MIT"
+format = "file"
+files = { model = "silero_vad.onnx" }
