@@ -5,6 +5,7 @@
 #include <fcitx-utils/capabilityflags.h>
 #include <fcitx-utils/i18n.h>
 #include <fcitx-utils/log.h>
+#include <fcitx-utils/stringutils.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputpanel.h>
@@ -142,8 +143,9 @@ void KoeInputAddon::applyConfig() {
 
 KoeInputAddon::PartialTarget KoeInputAddon::partialTarget(const fcitx::InputContext &ic) const {
     const auto &apps = *config_.panelApps;
-    const bool listed = std::any_of(apps.begin(), apps.end(), [&](const std::string &app) {
-        return strcasecmp(app.c_str(), ic.program().c_str()) == 0;
+    const bool listed = std::any_of(apps.begin(), apps.end(), [&](const std::string &entry) {
+        const std::string app = fcitx::stringutils::trim(entry);
+        return !app.empty() && strcasecmp(app.c_str(), ic.program().c_str()) == 0;
     });
     if (listed) return PartialTarget::Panel;
     switch (*config_.partialText) {
@@ -163,6 +165,16 @@ bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
     if (!panel.preedit().empty() || !panel.clientPreedit().empty()) return false;
     const auto list = panel.candidateList();
     return !list || list->size() == 0;
+}
+
+// The stored hotkey's release may have been lost (some X11 paths drop
+// releases), so a chord needs evidence that the key is still down: a held
+// modifier shows in the states of later keys; a plain key auto-repeats.
+bool KoeInputAddon::hotkeyHeld(const fcitx::Key &key, uint64_t nowMs) const {
+    if (hotkey_.empty()) return false;
+    const fcitx::KeyStates modifier = fcitx::Key::keySymToStates(hotkey_.sym);
+    if (modifier) return (key.states() & modifier) == modifier;
+    return nowMs - hotkey_.pressMs <= Controller::kRepeatGapMs;
 }
 
 void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
@@ -199,18 +211,25 @@ void KoeInputAddon::handleKey(fcitx::KeyEvent &event) {
     // the release lost, so the press is an ordinary key again.
     // key() is normalized and has lost the Repeat state; rawKey() keeps it.
     const bool flagged = event.rawKey().states().test(fcitx::KeyState::Repeat);
-    const bool repeat = sameKey && (flagged || now - hotkeyPressMs_ <= Controller::kRepeatGapMs);
-    if (repeat || key.checkKeyList(*config_.hotkey)) {
-        // Another configured hotkey while the first is still down is a chord.
-        if (!sameKey && !hotkey_.empty()) {
-            if (chordKey == chord_.end()) chord_.push_back({key.code(), key.sym()});
+    if (chordKey != chord_.end()) {
+        // A chord key repeats like the hotkey below (Alt_R released first, the
+        // chord's space still down); after a longer gap its release was lost.
+        if (flagged || now - chordKey->pressMs <= Controller::kRepeatGapMs) {
+            chordKey->pressMs = now;
             event.filterAndAccept();
             return;
         }
-        // A chord entry whose release was lost would otherwise swallow this key's release.
-        if (chordKey != chord_.end()) chord_.erase(chordKey);
-        hotkey_ = {key.code(), key.sym()};
-        hotkeyPressMs_ = now;
+        chord_.erase(chordKey);
+    }
+    const bool repeat = sameKey && (flagged || now - hotkey_.pressMs <= Controller::kRepeatGapMs);
+    if (repeat || key.checkKeyList(*config_.hotkey)) {
+        // Another configured hotkey while the first is still down is a chord.
+        if (!sameKey && hotkeyHeld(key, now)) {
+            chord_.push_back({key.code(), key.sym(), now});
+            event.filterAndAccept();
+            return;
+        }
+        hotkey_ = {key.code(), key.sym(), now};
         auto *ic = event.inputContext();
         // The controller shows the first status before it calls callStart().
         if (controller_.idle()) {

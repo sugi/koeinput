@@ -117,15 +117,16 @@ public:
         for (auto &s : env) envp.push_back(s.data());
         envp.push_back(nullptr);
 
-        // Opened before the fork: only async-signal-safe calls are allowed in the child.
+        // Prepared before the fork: only async-signal-safe calls are allowed in the child.
+        const std::string exe = binary();
         const std::string log = dir_ + "/stderr.log";
-        const int logFd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        const int logFd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         if (logFd < 0) die("cannot open " + log + ": " + std::strerror(errno));
-        const std::string execFailed = std::string("DaemonProcess: execve ") + binary() + " failed\n";
+        const std::string execFailed = "DaemonProcess: execve " + exe + " failed\n";
+        char *argv[] = {const_cast<char *>(exe.c_str()), nullptr};
         pid_ = fork();
         if (pid_ == 0) {
             dup2(logFd, 2);
-            char *argv[] = {const_cast<char *>(binary()), nullptr};
             execve(argv[0], argv, envp.data());
             ssize_t n = write(2, execFailed.data(), execFailed.size());
             (void)n;

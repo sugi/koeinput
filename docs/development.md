@@ -129,9 +129,9 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput. 
 - tap mode: a short press keeps recording until the next press;
 - the tap threshold in milliseconds;
 - partial text: where the text you are still speaking appears. "In the app" (the default) puts it into the app's text field as underlined preedit, or into the fcitx5 panel when the app has no preedit. "In the panel" always uses the panel. "Off" shows only the status;
-- apps that show partial text in the panel: program names (as fcitx5 sees them, case does not matter) that use the panel whatever the partial text setting says. Use it for apps that commit their own composition on blur, such as text-input-v3 clients (Chrome, Discord).
+- apps that show partial text in the panel: program names that use the panel whatever the partial text setting says. Case does not matter; spaces around a name are ignored. Use it for apps that commit their own composition on blur, such as text-input-v3 clients (Chrome, Discord). To find the name fcitx5 uses for an app, focus a text field in the app and run `fcitx5-diagnose`: the "Input Context" list in its output names the program of each context (the same list comes from `dbus-send --session --print-reply --dest=org.fcitx.Fcitx5 /controller org.fcitx.Fcitx.Controller1.DebugInfo`). Apps without a program name follow the main setting.
 
-Configs from before the "Partial text" setting have the boolean `ShowPartial`. The addon reads `ShowPartial=False` as "Off" until the settings are saved again.
+Configs from before the "Partial text" setting have the boolean `ShowPartial`. The addon reads `ShowPartial=False` as "Off"; the next save from the settings writes `PartialText=Off`.
 
 ### Host check
 

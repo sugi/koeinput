@@ -28,7 +28,7 @@ Each item names the milestone it belongs to.
   - Frontends that send keycode 0 cannot pair a release such as Alt+Shift+Meta_R with a stateless Alt_R press: no such frontend on the host.
   - An input method switch key during a session is handled by fcitx5 before the addon: the session keeps running, which is acceptable.
   - `Stop` and `Cancel` are sent without `NO_AUTO_START`: fcitx5's D-Bus API has no portable way to set it, and the window is milliseconds.
-- After a lost release of a hotkey, a press of another configured hotkey is taken for a chord and does nothing until the first hotkey is pressed again. A lost release is rare (the release went to another client or a grab) and the first hotkey recovers it.
+- With several hotkeys, a second hotkey pressed while the first counts as down is a chord only with evidence that the first is held: the press carries the first key's modifier state (Alt+space while Alt_R is stored), or the first key is a plain key pressed within the last second (it auto-repeats). Lost releases happen on some X11 paths, so without that evidence the stored press is dropped and the second hotkey starts a dictation. The gap that remains: hotkeys that share a modifier, such as Alt_R and Alt+space, after a lost Alt_R release; the next Alt+space is a chord that does nothing, and pressing Alt_R again starts a new dictation and clears it.
 
 ## Done
 

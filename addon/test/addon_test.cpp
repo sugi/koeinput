@@ -77,6 +77,12 @@ int main() {
         instance.addonManager().addon("koeinput")->setConfig(raw);
     };
     auto setHotkey = [&](const char *key) { setOption("Hotkey/0", key); };
+    auto setHotkeys = [&](const char *first, const char *second) {
+        RawConfig raw;
+        raw.setValueByPath("Hotkey/0", first);
+        raw.setValueByPath("Hotkey/1", second);
+        instance.addonManager().addon("koeinput")->setConfig(raw);
+    };
     auto configValue = [&](const char *path) {
         RawConfig raw;
         instance.addonManager().addon("koeinput")->getConfig()->save(raw);
@@ -331,6 +337,27 @@ int main() {
                       committed(5);
                       displayClear(ic());
                   })
+            .then(0, "app list with Off, app not on the list: press in the second context",
+                  [&] {
+                      ic()->focusOut();
+                      ic2()->setCapabilityFlags(CapabilityFlag::Preedit);
+                      ic2()->focusIn();
+                      KI_CHECK(sendKey(instance, uuid2, Key("Alt_R"), false));
+                  })
+            .then(1300, "app list with Off, app not on the list: status only",
+                  [&] {
+                      onlyStatus(ic2());
+                      displayClear(ic());
+                      cancelSession(uuid2);
+                  })
+            .then(1000, "app list with Off, app not on the list: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic2());
+                      ic2()->setCapabilityFlags(CapabilityFlags());
+                      ic2()->focusOut();
+                      ic()->focusIn();
+                  })
             .then(0, "app list with InApp: press",
                   [&] {
                       setOption("PartialText", "InApp");
@@ -519,18 +546,37 @@ int main() {
                       committed(13);
                       displayClear(ic());
                   })
-            .then(0, "chord: press Alt_R with two hotkeys configured",
+            // Without the Alt state, Control+space is no evidence that Alt_R is still down.
+            .then(0, "two hotkeys, lost release: press Alt_R",
                   [&] {
-                      RawConfig raw;
-                      raw.setValueByPath("Hotkey/0", "Alt_R");
-                      raw.setValueByPath("Hotkey/1", "Control+space");
-                      instance.addonManager().addon("koeinput")->setConfig(raw);
+                      setHotkeys("Alt_R", "Control+space");
                       KI_CHECK(send("Alt_R", false));
                   })
-            .then(700, "chord: Control+space while Alt_R is down is swallowed with its release",
+            .then(300, "two hotkeys, lost release: esc cancels, the release is lost",
+                  [&] {
+                      KI_CHECK(send("Escape", false));
+                      KI_CHECK(send("Escape", true));
+                  })
+            .then(1100, "two hotkeys, lost release: Control+space starts a new session",
                   [&] {
                       KI_CHECK(send("Control+space", false));
-                      KI_CHECK(send("space", true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(1400, "two hotkeys, lost release: release", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "two hotkeys, lost release: committed",
+                  [&] {
+                      committed(14);
+                      displayClear(ic());
+                  })
+            .then(0, "chord: press Alt_R",
+                  [&] {
+                      setHotkeys("Alt_R", "Alt+space");
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(700, "chord: Alt+space while Alt_R is down is swallowed with its release",
+                  [&] {
+                      KI_CHECK(send("Alt+space", false));
+                      KI_CHECK(send("Alt+space", true));
                   })
             .then(600, "chord: still recording, release Alt_R",
                   [&] {
@@ -539,7 +585,30 @@ int main() {
                   })
             .then(1500, "chord: committed",
                   [&] {
-                      committed(14);
+                      committed(15);
+                      displayClear(ic());
+                      KI_CHECK(!send("space", false));
+                      KI_CHECK(!send("space", true));
+                  })
+            // Alt_R released first while space stays down: its bare repeats and
+            // its release belong to the chord.
+            .then(0, "chord repeat: press Alt_R", [&] { KI_CHECK(send("Alt_R", false)); })
+            .then(700, "chord repeat: Alt+space", [&] { KI_CHECK(send("Alt+space", false)); })
+            .then(700, "chord repeat: release Alt_R, a bare space repeat is swallowed",
+                  [&] {
+                      KI_CHECK(send("Alt+Alt_R", true));
+                      KI_CHECK(send("space", false));
+                  })
+            .then(500, "chord repeat: later repeats are swallowed",
+                  [&] {
+                      KI_CHECK(sendKey(instance, uuid, Key(FcitxKey_space, KeyStates({KeyState::Repeat})),
+                                       false));
+                      KI_CHECK(send("space", false));
+                  })
+            .then(500, "chord repeat: the space release is swallowed", [&] { KI_CHECK(send("space", true)); })
+            .then(1500, "chord repeat: committed",
+                  [&] {
+                      committed(16);
                       displayClear(ic());
                       KI_CHECK(!send("space", false));
                       KI_CHECK(!send("space", true));
@@ -553,7 +622,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(14);
+                      committed(16);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -563,7 +632,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(15);
+                committed(17);
                 displayClear(ic());
             });
     } else {

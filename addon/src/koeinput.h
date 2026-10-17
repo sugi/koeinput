@@ -60,6 +60,7 @@ private:
     struct PressedKey {
         int code = 0;
         fcitx::KeySym sym = FcitxKey_None;
+        uint64_t pressMs = 0;
 
         bool empty() const { return code == 0 && sym == FcitxKey_None; }
         bool matches(const fcitx::Key &key) const {
@@ -67,8 +68,9 @@ private:
         }
     };
 
+    bool hotkeyHeld(const fcitx::Key &key, uint64_t nowMs) const;
+
     PressedKey hotkey_;
-    uint64_t hotkeyPressMs_ = 0;
     // Other configured hotkeys pressed while hotkey_ is down; they do nothing.
     std::vector<PressedKey> chord_;
     bool escapeDown_ = false;
