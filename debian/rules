@@ -8,6 +8,12 @@ include /usr/share/dpkg/buildflags.mk
 include /usr/share/dpkg/buildopts.mk
 include /usr/share/dpkg/pkg-info.mk
 
+# Ubuntu 24.04 has rustc 1.75; its versioned rustc-1.91 and cargo-1.91 packages
+# install the tools here.
+ifneq (,$(wildcard /usr/lib/rust-1.91/bin))
+export PATH := /usr/lib/rust-1.91/bin:$(PATH)
+endif
+
 # Cargo builds offline from vendor/ and keeps away from ~/.cargo.
 export CARGO_HOME = $(CURDIR)/debian/cargo-home
 # Both paths must be absolute: the sherpa-onnx-sys build script reads them as they are.
@@ -41,7 +47,15 @@ debian/sherpa-lib/stamp:
 	done
 	touch $@
 
+# The workspace needs Rust 1.89 (rust-version in Cargo.toml). Stop before the long
+# build, with a message that names the fix.
 override_dh_auto_configure: debian/cargo-home/config.toml debian/sherpa-lib/stamp
+	@v=$$(rustc --version 2>/dev/null | cut -d' ' -f2); \
+	echo "rustc $${v:-not found} ($$(command -v rustc))"; \
+	dpkg --compare-versions "$${v:-0}" ge 1.89 || { \
+	  echo "debian/rules: KoeInput needs Rust 1.89 or newer, but rustc is $${v:-not found}." >&2; \
+	  echo "debian/rules: on Ubuntu 24.04, install rustc-1.91 and cargo-1.91." >&2; \
+	  exit 1; }
 	dh_auto_configure
 
 override_dh_auto_build:

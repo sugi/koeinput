@@ -4,8 +4,8 @@ Priority: optional
 Maintainer: Tatsuki Sugiura <sugi@nemui.org>
 Build-Depends:
  debhelper-compat (= 13),
- cargo (>= 1.89),
- rustc (>= 1.89),
+ cargo (>= 1.89) | cargo-1.91,
+ rustc (>= 1.89) | rustc-1.91,
  pkgconf,
  libpulse-dev,
  cmake (>= 3.25),

@@ -4,7 +4,10 @@
 # target/deb/ (made by scripts/make-orig when missing) and the debian/ directory of
 # the work tree. Packages, the source package, the build log and the lintian output
 # go to target/deb/<dist>/.
-# Usage: scripts/build-deb trixie|testing
+# The Ubuntu builds (noble is 24.04, resolute is 26.04) add a local changelog entry
+# in the container, so their packages are version <version>~<dist>1; the committed
+# debian/changelog stays as it is.
+# Usage: scripts/build-deb trixie|testing|noble|resolute
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -14,9 +17,10 @@ die() {
   exit 1
 }
 case "${1:-}" in
-  trixie | testing) dist=$1 ;;
+  trixie | testing) dist=$1 suffix= ;;
+  noble | resolute) dist=$1 suffix="~$1" ;;
   *)
-    echo "usage: scripts/build-deb trixie|testing" >&2
+    echo "usage: scripts/build-deb trixie|testing|noble|resolute" >&2
     exit 2 ;;
 esac
 
@@ -76,6 +80,15 @@ if ! podman image exists "$image"; then
   nice -n 10 podman build -t "$image" -f "$containerfile" packaging/containers
 fi
 
+# lintian 2.117 on Ubuntu 24.04 still reports spelling-error-in-binary (later
+# versions mark it experimental), and it finds other words than the newer versions
+# that debian/koeinput.lintian-overrides was written for: "wtH", which is bytes of
+# machine code, but not "preceeding", which the rustc 1.91 build places directly
+# before another string. lintian then warns about the unused override for it
+# (mismatched-override).
+suppress=initial-upload-closes-no-bugs,no-homepage-field,debian-watch-file-is-missing
+[ "$dist" != noble ] || suppress=$suppress,spelling-error-in-binary
+
 out=target/deb/$dist
 rm -rf "$out"
 mkdir -p "$out"
@@ -95,15 +108,25 @@ tar -xf $BASE.orig.tar.xz -C $PKG --strip-components=1
 tar -xf $BASE.orig-vendor.tar.xz -C $PKG/vendor --strip-components=1
 tar -xf $BASE.orig-sherpaonnx.tar.bz2 -C $PKG/sherpaonnx --strip-components=1
 cp -r /src/debian $PKG/debian
+if [ -n "$SUFFIX" ]; then
+  (
+    cd $PKG
+    DEBEMAIL=$(dpkg-parsechangelog -S Maintainer) dch --local "$SUFFIX" --distribution "$DIST" "Build for $DIST."
+    v=$(dpkg-parsechangelog -S Version)
+    [ "$v" = "$UPSTREAM-$REVISION" ] || { echo "dch made version $v, not $UPSTREAM-$REVISION" >&2; exit 1; }
+  )
+fi
 (cd $PKG && dpkg-buildpackage -us -uc -S)
 dpkg-source -x ${BASE}-$REVISION.dsc build
 (cd build && dpkg-buildpackage -us -uc -b -Jauto)
 status=0
-lintian -EvIL +pedantic --fail-on error,warning \
-  --suppress-tags initial-upload-closes-no-bugs,no-homepage-field,debian-watch-file-is-missing \
+lintian -EvIL +pedantic --fail-on error,warning --suppress-tags "$SUPPRESS" \
   ${BASE}-${REVISION}_amd64.changes >lintian.txt 2>&1 || status=$?
 cat lintian.txt
 cp *.deb *.changes *.buildinfo *.dsc *.debian.tar.* lintian.txt /out/
+# Ubuntu names the debug symbol packages *.ddeb.
+set -- *.ddeb
+[ ! -e "$1" ] || cp "$@" /out/
 if grep -q "^[EW]: " lintian.txt; then
   echo "lintian reported errors or warnings" >&2
   exit 1
@@ -116,7 +139,9 @@ fi
   nice -n 10 podman run --rm --network=none --userns=keep-id \
     -v "$root:/src:ro" -v "$root/$out:/out" \
     -e HOME=/tmp/home -e DEB_BUILD_OPTIONS \
-    -e BASE="$base" -e PKG="koeinput-$upstream" -e REVISION="${version##*-}" \
+    -e BASE="$base" -e PKG="koeinput-$upstream" -e UPSTREAM="$upstream" \
+    -e REVISION="${version##*-}${suffix:+${suffix}1}" -e SUFFIX="$suffix" -e DIST="$dist" \
+    -e SUPPRESS="$suppress" \
     "$image" tini -g -- sh -c "$build" || echo $? >"$tmp/failed"
 } 2>&1 | tee "$out/build.log"
 if [ -e "$tmp/failed" ]; then
