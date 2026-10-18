@@ -220,12 +220,14 @@ One source package, `koeinput`, builds two binary packages:
 - `koeinput`: the daemon, the `koeinput` command, the systemd user unit, the D-Bus service file, the model catalog and the man page;
 - `fcitx5-koeinput`: the addon.
 
-They are built for Debian 13 (trixie) and Debian testing, for amd64 only. Everything runs in podman containers.
+They are built for Debian 13 (trixie), Debian testing, Ubuntu 24.04 (noble) and Ubuntu 26.04 (resolute), for amd64 only, all from the same `debian/` directory. Everything runs in podman containers.
 
 ```sh
-scripts/build-deb testing      # or trixie
+scripts/build-deb testing      # or trixie, noble, resolute
 scripts/test-deb testing
 ```
+
+Build the packages for each release on its own: they depend on the library versions of the release they were built on (for example fcitx5 5.1.19 or newer for a 26.04 build).
 
 - `scripts/make-orig` makes the three orig tarballs in `target/deb/` from a clean work tree:
   - `koeinput_0.1.0.orig.tar.xz`: `git archive` of HEAD, without `debian/`;
@@ -233,12 +235,22 @@ scripts/test-deb testing
   - `koeinput_0.1.0.orig-sherpaonnx.tar.bz2`: the pinned sherpa-onnx archive, byte for byte.
 
   It keeps an existing tarball with the same content and stops at one with different content.
-- `scripts/build-deb trixie|testing` builds the source and binary packages without network in the image from `packaging/containers/deb-<dist>.Containerfile`, then runs lintian. The packages, the source package, `build.log` and `lintian.txt` go to `target/deb/<dist>/`.
+- `scripts/build-deb trixie|testing|noble|resolute` builds the source and binary packages without network in the image from `packaging/containers/deb-<dist>.Containerfile`, then runs lintian. The packages, the source package, `build.log` and `lintian.txt` go to `target/deb/<dist>/`.
   - It runs `scripts/gen-copyright --check` first, and `scripts/make-orig` when a tarball is missing or out of date.
   - Files outside `debian/` come from HEAD through the orig tarball, so commit them first. `debian/` comes from the work tree, so you can try packaging changes before you commit them.
-  - The package build runs `cargo test`, the addon's `controller` test and `scripts/check-no-gpl` (before the binaries are stripped).
-  - Rust comes from the distribution. Debian 13 has rustc 1.85 and the workspace needs 1.89, so the trixie image takes Rust from trixie-backports.
-- `scripts/test-deb trixie|testing` installs the two packages in a fresh `debian:<dist>` container. apt downloads the dependencies, so it needs the network. It checks:
+  - The package build runs `cargo test`, the addon's `controller` test and `scripts/check-no-gpl`. The GPL check runs twice: on the binaries right after the build, and on the installed files in `debian/koeinput/` just before `dh_strip` strips them. `cargo test` uses its own target directory, `target-test/`, so it cannot rebuild the binaries that ship.
+  - Rust comes from the distribution. The workspace needs 1.89:
+    - Debian 13 has rustc 1.85, so the trixie image takes Rust from trixie-backports;
+    - Ubuntu 24.04 has rustc 1.75, so the noble image installs `rustc-1.91` and `cargo-1.91` (noble-updates). They install to `/usr/lib/rust-1.91/bin`, which `debian/rules` puts first in `PATH` when it exists. `debian/control` accepts either `rustc (>= 1.89)` or `rustc-1.91` (and the same for cargo);
+    - Debian testing and Ubuntu 26.04 have new enough Rust.
+
+    `debian/rules` stops with a message when `rustc` is older than 1.89.
+  - The Ubuntu builds get their own version: in the container, before the package build, the script adds a local entry to `debian/changelog` with `dch --local ~<dist> --distribution <dist>`. The packages are then `0.1.0-1~noble1` and `0.1.0-1~resolute1`. The entry is dated one second after the committed top entry, so the build date does not depend on when it runs, and the entry is newer than the one below it, as lintian wants. The committed `debian/changelog` does not change, and the Debian builds keep `0.1.0-1`.
+
+    The Ubuntu builds print `dpkg-genchanges: warning: the current version (0.1.0-1~<dist>1) is earlier than the previous one (0.1.0-1)`. This is expected: the local `~<dist>1` entry sits above `-1` on purpose, and `~` sorts before the end of the version.
+  - Ubuntu names the debug symbol packages `*-dbgsym_*.ddeb` instead of `*-dbgsym_*.deb`. They go to `target/deb/<dist>/` too.
+  - lintian must report no errors and no warnings. Ubuntu 24.04 has an older lintian (2.117), which reports other spelling errors in the binaries than the newer versions that `debian/koeinput.lintian-overrides` was written for. So the noble build skips the `spelling-error-in-binary` check; the comment in `scripts/build-deb` gives the details. The 26.04 lintian output shows the experimental tag `X: spelling-error-in-binary wtH`: the word is bytes of machine code. It has no override, because the override would be unused on Debian, and it does not fail the build.
+- `scripts/test-deb trixie|testing|noble|resolute` installs the two packages in a fresh container: `debian:<dist>`, `ubuntu:24.04` or `ubuntu:26.04`. apt downloads the dependencies, so it needs the network. The Ubuntu container images leave out man pages, translations and most documentation, and replace `man` with a stub. The script undoes this first, so the files are installed as on a normal Ubuntu system. It checks:
   - the installed files, and which package installs each one;
   - `koeinput --version`, `koeinput model list` and `man koeinput`;
   - `koeinput status` under `dbus-run-session`: the bus starts the daemon through the D-Bus service file. With no model installed, the daemon reports `ready: no` and logs the install hint;
@@ -265,7 +277,7 @@ Once a version is released, keep its tarballs. Any later build then needs a new 
 1. Raise `version` in `Cargo.toml` and the `koeinput-dbus-api` version in `crates/cli/Cargo.toml` and `crates/daemon/Cargo.toml`. Then update the lock file: `scripts/dev cargo update --workspace`.
 2. Raise `VERSION` in `project()` in `addon/CMakeLists.txt`.
 3. Add an entry at the top of `debian/changelog` (version `X.Y.Z-1`) in the same format as the existing one.
-4. Commit, then run `scripts/build-deb` and `scripts/test-deb` for both distributions.
+4. Commit, then run `scripts/build-deb` and `scripts/test-deb` for each distribution.
 
 ### New sherpa-onnx pin
 

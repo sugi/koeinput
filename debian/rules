@@ -8,6 +8,12 @@ include /usr/share/dpkg/buildflags.mk
 include /usr/share/dpkg/buildopts.mk
 include /usr/share/dpkg/pkg-info.mk
 
+# Ubuntu 24.04 has rustc 1.75; its versioned rustc-1.91 and cargo-1.91 packages
+# install the tools here.
+ifneq (,$(wildcard /usr/lib/rust-1.91/bin))
+export PATH := /usr/lib/rust-1.91/bin:$(PATH)
+endif
+
 # Cargo builds offline from vendor/ and keeps away from ~/.cargo.
 export CARGO_HOME = $(CURDIR)/debian/cargo-home
 # Both paths must be absolute: the sherpa-onnx-sys build script reads them as they are.
@@ -41,7 +47,15 @@ debian/sherpa-lib/stamp:
 	done
 	touch $@
 
+# The workspace needs Rust 1.89 (rust-version in Cargo.toml). Stop before the long
+# build, with a message that names the fix.
 override_dh_auto_configure: debian/cargo-home/config.toml debian/sherpa-lib/stamp
+	@v=$$(rustc --version 2>/dev/null | cut -d' ' -f2); \
+	echo "rustc $${v:-not found} ($$(command -v rustc))"; \
+	dpkg --compare-versions "$${v:-0}" ge 1.89 || { \
+	  echo "debian/rules: KoeInput needs Rust 1.89 or newer, but rustc is $${v:-not found}." >&2; \
+	  echo "debian/rules: on Ubuntu 24.04, install rustc-1.91 and cargo-1.91." >&2; \
+	  exit 1; }
 	dh_auto_configure
 
 override_dh_auto_build:
@@ -52,10 +66,13 @@ override_dh_auto_build:
 
 # The addon's D-Bus and fcitx5 tests and the daemon's D-Bus tests need a session
 # bus and a test daemon; they run in the development test runs only.
+# cargo test builds with other features (dev-dependencies) and would relink the
+# binaries in target/release, after check-no-gpl and before they are installed,
+# so it gets its own target directory.
 override_dh_auto_test:
 	dh_auto_test -- 'ARGS+=-R controller'
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	cargo test $(CARGO_FLAGS)
+	CARGO_TARGET_DIR=$(CURDIR)/target-test cargo test $(CARGO_FLAGS)
 endif
 
 override_dh_auto_install:
@@ -66,9 +83,13 @@ override_dh_auto_install:
 	install -D -m 0644 data/org.nemui.KoeInput.service debian/tmp/usr/share/dbus-1/services/org.nemui.KoeInput.service
 	install -D -m 0644 data/models.toml debian/tmp/usr/share/koeinput/models.toml
 
+# Checks the files that ship, which dh_strip is about to strip.
+execute_before_dh_strip:
+	scripts/check-no-gpl debian/koeinput/usr/bin/koeinput debian/koeinput/usr/libexec/koeinput/koeinput-daemon
+
 override_dh_auto_clean:
 	dh_auto_clean
-	rm -rf target debian/cargo-home debian/sherpa-lib debian/koeinput.1
+	rm -rf target target-test debian/cargo-home debian/sherpa-lib debian/koeinput.1
 
 # dh_clean deletes *.orig files, which would take the vendored Cargo.toml.orig
 # files with it and break cargo's checksums of the vendored crates.

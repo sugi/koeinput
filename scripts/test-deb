@@ -1,10 +1,11 @@
 #!/bin/sh
-# Installs the packages from target/deb/<dist>/ in a fresh debian:<dist> container
+# Installs the packages from target/deb/<dist>/ in a fresh container of the
+# distribution (debian:<dist>, ubuntu:24.04 for noble, ubuntu:26.04 for resolute)
 # and checks them: the installed files, the koeinput command and man page, D-Bus
 # activation of the daemon, loading the addon in a headless fcitx5, then removal
 # and a second install. apt needs the network for the dependencies. The output
 # also goes to target/deb/<dist>/test.log.
-# Usage: scripts/test-deb trixie|testing
+# Usage: scripts/test-deb trixie|testing|noble|resolute
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -14,9 +15,11 @@ die() {
   exit 1
 }
 case "${1:-}" in
-  trixie | testing) dist=$1 ;;
+  trixie | testing) dist=$1 image=docker.io/library/debian:$1 suffix= ;;
+  noble) dist=$1 image=docker.io/library/ubuntu:24.04 suffix="~${1}1" ;;
+  resolute) dist=$1 image=docker.io/library/ubuntu:26.04 suffix="~${1}1" ;;
   *)
-    echo "usage: scripts/test-deb trixie|testing" >&2
+    echo "usage: scripts/test-deb trixie|testing|noble|resolute" >&2
     exit 2 ;;
 esac
 
@@ -24,6 +27,8 @@ version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
 [ -n "$version" ] || die "cannot read the version from debian/changelog"
 version=${version#*:}
 upstream=${version%-*}
+# scripts/build-deb adds this local version to the Ubuntu builds.
+version=$version$suffix
 out=target/deb/$dist
 for pkg in koeinput fcitx5-koeinput; do
   [ -e "$out/${pkg}_${version}_amd64.deb" ] ||
@@ -79,6 +84,16 @@ check_installed() {
 }
 
 root_main() {
+  # The Ubuntu container images leave out man pages, translations and most of
+  # /usr/share/doc, and divert man to a stub. A normal Ubuntu install has them.
+  if [ -e /etc/dpkg/dpkg.cfg.d/excludes ]; then
+    rm /etc/dpkg/dpkg.cfg.d/excludes
+    if [ "$(dpkg-divert --truename /usr/bin/man)" = /usr/bin/man.REAL ]; then
+      rm -f /usr/bin/man
+      dpkg-divert --quiet --remove --rename /usr/bin/man
+    fi
+  fi
+
   step "install $DEBS"
   apt-get update -q
   apt-get install -y -q --no-install-recommends $DEBS
@@ -244,7 +259,7 @@ EOF
   nice -n 10 podman run --rm \
     -v "$root/$out:/debs:ro" -v "$tmp/test.sh:/test/test.sh:ro" \
     -e VERSION="$version" -e UPSTREAM="$upstream" \
-    "docker.io/library/debian:$dist" sh /test/test.sh pid1 || echo $? >"$tmp/failed"
+    "$image" sh /test/test.sh pid1 || echo $? >"$tmp/failed"
 } 2>&1 | tee "$out/test.log"
 if [ -e "$tmp/failed" ]; then
   die "the install test failed for $dist; see $out/test.log"
