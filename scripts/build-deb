@@ -88,6 +88,9 @@ fi
 # (mismatched-override).
 suppress=initial-upload-closes-no-bugs,no-homepage-field,debian-watch-file-is-missing
 [ "$dist" != noble ] || suppress=$suppress,spelling-error-in-binary
+# The local Ubuntu entry has the same date as the entry below it, on purpose (see
+# the dch step below); lintian wants a later date.
+[ -z "$suffix" ] || suppress=$suppress,latest-changelog-entry-without-new-date
 
 out=target/deb/$dist
 rm -rf "$out"
@@ -108,12 +111,18 @@ tar -xf $BASE.orig.tar.xz -C $PKG --strip-components=1
 tar -xf $BASE.orig-vendor.tar.xz -C $PKG/vendor --strip-components=1
 tar -xf $BASE.orig-sherpaonnx.tar.bz2 -C $PKG/sherpaonnx --strip-components=1
 cp -r /src/debian $PKG/debian
+# The local entry takes the date of the committed top entry, so the build does not
+# depend on when it runs (SOURCE_DATE_EPOCH comes from this date).
 if [ -n "$SUFFIX" ]; then
   (
     cd $PKG
+    date=$(dpkg-parsechangelog -S Date)
     DEBEMAIL=$(dpkg-parsechangelog -S Maintainer) dch --local "$SUFFIX" --distribution "$DIST" "Build for $DIST."
+    sed -i "0,/^ -- /s|^\( -- .*>  \).*|\1$date|" debian/changelog
     v=$(dpkg-parsechangelog -S Version)
     [ "$v" = "$UPSTREAM-$REVISION" ] || { echo "dch made version $v, not $UPSTREAM-$REVISION" >&2; exit 1; }
+    d=$(dpkg-parsechangelog -S Date)
+    [ "$d" = "$date" ] || { echo "the local changelog entry has date $d, not $date" >&2; exit 1; }
   )
 fi
 (cd $PKG && dpkg-buildpackage -us -uc -S)

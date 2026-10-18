@@ -66,10 +66,13 @@ override_dh_auto_build:
 
 # The addon's D-Bus and fcitx5 tests and the daemon's D-Bus tests need a session
 # bus and a test daemon; they run in the development test runs only.
+# cargo test builds with other features (dev-dependencies) and would relink the
+# binaries in target/release, after check-no-gpl and before they are installed,
+# so it gets its own target directory.
 override_dh_auto_test:
 	dh_auto_test -- 'ARGS+=-R controller'
 ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
-	cargo test $(CARGO_FLAGS)
+	CARGO_TARGET_DIR=$(CURDIR)/target-test cargo test $(CARGO_FLAGS)
 endif
 
 override_dh_auto_install:
@@ -80,9 +83,13 @@ override_dh_auto_install:
 	install -D -m 0644 data/org.nemui.KoeInput.service debian/tmp/usr/share/dbus-1/services/org.nemui.KoeInput.service
 	install -D -m 0644 data/models.toml debian/tmp/usr/share/koeinput/models.toml
 
+# Checks the files that ship, which dh_strip is about to strip.
+execute_before_dh_strip:
+	scripts/check-no-gpl debian/koeinput/usr/bin/koeinput debian/koeinput/usr/libexec/koeinput/koeinput-daemon
+
 override_dh_auto_clean:
 	dh_auto_clean
-	rm -rf target debian/cargo-home debian/sherpa-lib debian/koeinput.1
+	rm -rf target target-test debian/cargo-home debian/sherpa-lib debian/koeinput.1
 
 # dh_clean deletes *.orig files, which would take the vendored Cargo.toml.orig
 # files with it and break cargo's checksums of the vendored crates.
