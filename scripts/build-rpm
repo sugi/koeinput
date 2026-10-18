@@ -79,7 +79,7 @@ set -eu
 top=/tmp/rpmbuild
 mkdir -p "$HOME" $top/SOURCES $top/SPECS
 for f in /src/target/deb/$BASE.orig*; do ln -s "$f" $top/SOURCES/; done
-cp /src/debian/copyright $top/SOURCES/copyright
+cp /src/debian/copyright $top/SOURCES/koeinput-copyright
 cp /src/packaging/rpm/koeinput.spec $top/SPECS/
 rpmbuild -ba --define "_topdir $top" $top/SPECS/koeinput.spec
 cp $top/RPMS/*/*.rpm $top/SRPMS/*.rpm /out/
