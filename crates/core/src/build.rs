@@ -1,8 +1,8 @@
 use crate::config::{Config, Paths};
 use crate::engine::{Engine, VadFactory};
-use crate::models::{Catalog, VAD_MODEL_ID};
+use crate::models::{Catalog, ModelEntry, VAD_MODEL_ID};
 use crate::postprocess::{PostProcessor, load_dictionary};
-use crate::recognizer::SherpaOffline;
+use crate::recognizer::{Recognizer, SherpaOffline};
 use crate::session::SessionConfig;
 use crate::vad::{SileroVad, Vad};
 use std::sync::Arc;
@@ -19,9 +19,33 @@ pub enum BuildError {
     Load(String),
 }
 
+/// Loads the main model and, when configured, the final-stage model.
+/// A final-stage model that cannot be loaded is logged; the engine then uses the main model only.
 pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildError> {
-    let catalog =
-        Catalog::load(&paths.catalog_file).map_err(|e| BuildError::Catalog(e.to_string()))?;
+    let (mut engine, id) = load_main(paths, cfg)?;
+    match load_final(paths, cfg) {
+        Ok(rec) => engine.final_rec = rec,
+        Err(e) => tracing::warn!("final-stage model: {e}; using {id} only"),
+    }
+    Ok((engine, id))
+}
+
+/// The configured dictionary file, or the default one.
+pub fn dictionary_path(paths: &Paths, cfg: &Config) -> std::path::PathBuf {
+    cfg.dictionary
+        .clone()
+        .unwrap_or_else(|| paths.dictionary_file.clone())
+}
+
+fn catalog(paths: &Paths) -> Result<Catalog, BuildError> {
+    Catalog::load(&paths.catalog_file).map_err(|e| BuildError::Catalog(e.to_string()))
+}
+
+/// The configured (or default) main model and the VAD model.
+fn main_entries<'a>(
+    catalog: &'a Catalog,
+    cfg: &Config,
+) -> Result<(&'a ModelEntry, &'a ModelEntry), BuildError> {
     let entry = match &cfg.model {
         Some(id) => catalog
             .get(id)
@@ -33,6 +57,24 @@ pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), Buil
     let vad_entry = catalog
         .get(VAD_MODEL_ID)
         .ok_or_else(|| BuildError::Catalog("no silero-vad entry".into()))?;
+    Ok((entry, vad_entry))
+}
+
+/// Whether the files of the configured (or default) main model and the VAD model are installed.
+/// A catalog or configuration error counts as not installed; `load_main` reports the cause.
+pub fn main_model_installed(paths: &Paths, cfg: &Config) -> bool {
+    catalog(paths)
+        .and_then(|c| {
+            let (m, v) = main_entries(&c, cfg)?;
+            Ok([m, v].iter().all(|e| e.is_installed(&paths.models_dir)))
+        })
+        .unwrap_or(false)
+}
+
+/// The engine without the final-stage model.
+pub fn load_main(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildError> {
+    let catalog = catalog(paths)?;
+    let (entry, vad_entry) = main_entries(&catalog, cfg)?;
     for e in [entry, vad_entry] {
         if !e.is_installed(&paths.models_dir) {
             return Err(BuildError::NoModel {
@@ -41,11 +83,8 @@ pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), Buil
             });
         }
     }
-    let dict_path = cfg
-        .dictionary
-        .clone()
-        .unwrap_or_else(|| paths.dictionary_file.clone());
-    let dict = load_dictionary(&dict_path).map_err(|e| BuildError::Load(e.to_string()))?;
+    let dict = load_dictionary(&dictionary_path(paths, cfg))
+        .map_err(|e| BuildError::Load(e.to_string()))?;
     for w in &dict.warnings {
         tracing::warn!("{w}");
     }
@@ -62,10 +101,43 @@ pub fn load_engine(paths: &Paths, cfg: &Config) -> Result<(Engine, String), Buil
     let engine = Engine {
         cfg: SessionConfig::from_config(cfg),
         rec: Arc::new(rec),
+        final_rec: None,
         vad,
         post: Arc::new(PostProcessor::new(dict.pairs)),
     };
     Ok((engine, entry.id.clone()))
+}
+
+/// The configured final-stage recognizer, or `None` when no final-stage model is configured.
+pub fn load_final(paths: &Paths, cfg: &Config) -> Result<Option<Arc<dyn Recognizer>>, BuildError> {
+    let Some(id) = &cfg.final_model else {
+        return Ok(None);
+    };
+    if cfg.final_full_max_ms == 0 {
+        tracing::warn!(
+            model = %id,
+            "not loading the final-stage model: final_full_max_ms is 0"
+        );
+        return Ok(None);
+    }
+    let catalog = catalog(paths)?;
+    let entry = catalog
+        .get(id)
+        .ok_or_else(|| BuildError::UnknownModel(id.clone()))?;
+    if entry.kind == "vad" {
+        return Err(BuildError::Load(format!(
+            "{id} is a VAD model, not a recognizer"
+        )));
+    }
+    if !entry.is_installed(&paths.models_dir) {
+        return Err(BuildError::NoModel {
+            id: id.clone(),
+            hint: format!("koeinput model install {id}"),
+        });
+    }
+    let rec = SherpaOffline::new(entry, &paths.models_dir, effective_threads(cfg.threads))
+        .map_err(|e| BuildError::Load(e.to_string()))?;
+    Ok(Some(Arc::new(rec)))
 }
 
 fn effective_threads(threads: i32) -> i32 {
@@ -121,6 +193,97 @@ mod tests {
                 "koeinput model install silero-vad".into()
             )
         );
+    }
+
+    #[test]
+    fn main_model_installed_needs_the_main_and_vad_models() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = test_paths(tmp.path());
+        let cfg = Config::default();
+        assert!(!main_model_installed(&paths, &cfg));
+
+        let catalog = Catalog::load(&paths.catalog_file).unwrap();
+        let install = |id: &str| {
+            let e = catalog.get(id).unwrap();
+            let dir = e.dir(&paths.models_dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in e.files.values() {
+                std::fs::write(dir.join(f), b"x").unwrap();
+            }
+        };
+        install(catalog.default_model().unwrap().id.as_str());
+        assert!(!main_model_installed(&paths, &cfg));
+        install(VAD_MODEL_ID);
+        assert!(main_model_installed(&paths, &cfg));
+
+        let unknown = Config {
+            model: Some("no-such-model".into()),
+            ..Config::default()
+        };
+        assert!(!main_model_installed(&paths, &unknown));
+    }
+
+    fn test_paths(dir: &Path) -> Paths {
+        Paths {
+            config_file: dir.join("config.toml"),
+            dictionary_file: dir.join("dictionary.tsv"),
+            models_dir: dir.join("models"),
+            catalog_file: Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../data/models.toml"
+            ))
+            .into(),
+        }
+    }
+
+    fn final_error(paths: &Paths, id: &str, final_full_max_ms: u64) -> BuildError {
+        let cfg = Config {
+            final_model: Some(id.into()),
+            final_full_max_ms,
+            ..Config::default()
+        };
+        match load_final(paths, &cfg) {
+            Err(e) => e,
+            Ok(r) => panic!("expected an error, got a recognizer: {}", r.is_some()),
+        }
+    }
+
+    #[test]
+    fn no_final_model_configured_loads_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = test_paths(tmp.path());
+        assert!(load_final(&paths, &Config::default()).unwrap().is_none());
+    }
+
+    #[test]
+    fn final_model_errors_name_the_model() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = test_paths(tmp.path());
+        match final_error(&paths, "cohere-transcribe", 30_000) {
+            BuildError::NoModel { id, hint } => {
+                assert_eq!(id, "cohere-transcribe");
+                assert_eq!(hint, "koeinput model install cohere-transcribe");
+            }
+            e => panic!("{e}"),
+        }
+        assert!(matches!(
+            final_error(&paths, "nope", 30_000),
+            BuildError::UnknownModel(id) if id == "nope"
+        ));
+        let e = final_error(&paths, VAD_MODEL_ID, 30_000).to_string();
+        assert!(e.contains("not a recognizer"), "{e}");
+    }
+
+    #[test]
+    fn final_model_is_skipped_when_the_whole_utterance_decode_is_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = test_paths(tmp.path());
+        let cfg = Config {
+            final_model: Some("cohere-transcribe".into()),
+            final_full_max_ms: 0,
+            ..Config::default()
+        };
+        assert!(load_final(&paths, &cfg).unwrap().is_none());
     }
 
     #[test]

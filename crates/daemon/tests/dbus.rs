@@ -1,7 +1,7 @@
 #![cfg(feature = "test-hooks")]
 
 use futures_util::StreamExt;
-use koeinput_dbus_api::{BUS_NAME, Recognizer1Proxy};
+use koeinput_dbus_api::{BUS_NAME, Recognizer1Proxy, StateChangedStream};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -31,12 +31,17 @@ impl Drop for Daemon {
 }
 
 /// Config, data and stderr of the daemon go to a fresh directory, away from the developer's own files.
-fn daemon_command(extra: &[(&str, &str)]) -> (Command, PathBuf) {
+fn daemon_command(extra: &[(&str, &str)], config: &str) -> (Command, PathBuf) {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
     let dir =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("dbus-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    if !config.is_empty() {
+        let cfg_dir = dir.join("config/koeinput");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config.toml"), config).unwrap();
+    }
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_koeinput-daemon"));
     cmd.env("HOME", &dir)
         .env("XDG_CONFIG_HOME", dir.join("config"))
@@ -50,7 +55,29 @@ fn daemon_command(extra: &[(&str, &str)]) -> (Command, PathBuf) {
     (cmd, dir)
 }
 
+/// A path the fake loader waits for; the test creates the file when the load may finish.
+fn gate_path() -> PathBuf {
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::SeqCst);
+    let gate =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("gate-{}-{n}", std::process::id()));
+    // Process ids repeat across container runs, so a file left by an earlier run must not open this gate.
+    let _ = std::fs::remove_file(&gate);
+    gate
+}
+
+fn open_gate(gate: &std::path::Path) {
+    std::fs::write(gate, b"").unwrap();
+}
+
 async fn start_daemon(extra: &[(&str, &str)]) -> (Daemon, zbus::Connection) {
+    start_daemon_with_config(extra, "").await
+}
+
+async fn start_daemon_with_config(
+    extra: &[(&str, &str)],
+    config: &str,
+) -> (Daemon, zbus::Connection) {
     let turn = BUS_TURN.lock().await;
     let conn = zbus::Connection::session().await.unwrap();
     let dbus = zbus::fdo::DBusProxy::new(&conn).await.unwrap();
@@ -64,7 +91,7 @@ async fn start_daemon(extra: &[(&str, &str)]) -> (Daemon, zbus::Connection) {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let (mut cmd, dir) = daemon_command(extra);
+    let (mut cmd, dir) = daemon_command(extra, config);
     let child = Daemon {
         child: cmd.spawn().unwrap(),
         dir,
@@ -235,7 +262,7 @@ async fn worker_panic_ends_session_with_error_and_frees_the_daemon() {
 #[tokio::test(flavor = "multi_thread")]
 async fn second_daemon_does_not_take_over_the_name() {
     let (d, conn) = start_daemon(&[]).await;
-    let (mut cmd, dir) = daemon_command(&[]);
+    let (mut cmd, dir) = daemon_command(&[], "");
     let mut second = cmd.spawn().unwrap();
     let mut status = None;
     for _ in 0..100 {
@@ -264,12 +291,190 @@ async fn second_daemon_does_not_take_over_the_name() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ready_and_model_changes_reach_an_existing_proxy() {
-    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "1000")]).await;
+    let gate = gate_path();
+    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap())]).await;
     let p = Recognizer1Proxy::new(&conn).await.unwrap();
     assert!(!p.ready().await.unwrap());
     assert_eq!(p.model().await.unwrap(), "parakeet-ja");
+    open_gate(&gate);
     wait_ready(&p).await;
     assert_eq!(p.model().await.unwrap(), "fake");
+    assert_eq!(p.final_model().await.unwrap(), "");
+    assert!(!p.final_model_ready().await.unwrap());
+}
+
+const FINAL_CONFIG: &str = "final_model = \"cohere-transcribe\"\n";
+
+async fn wait_final_ready(p: &Recognizer1Proxy<'_>) {
+    for _ in 0..100 {
+        if p.final_model_ready().await.unwrap() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("final-stage model not ready");
+}
+
+/// Waits until the session has ended with `done`.
+/// The daemon frees the session only right before that state goes out, after `Final`,
+/// so a Start sent on receipt of `Final` can still be refused as Busy.
+async fn wait_done(states: &mut StateChangedStream, id: u32) {
+    let ended = async {
+        while let Some(s) = states.next().await {
+            let a = s.args().unwrap();
+            if a.session == id && matches!(a.state.as_str(), "done" | "cancelled" | "error") {
+                return a.state.clone();
+            }
+        }
+        panic!("StateChanged stream ended");
+    };
+    let state = timeout(Duration::from_secs(5), ended)
+        .await
+        .expect("session did not end");
+    assert_eq!(state, "done");
+}
+
+/// Records for about a second and returns the session's partial texts and its final text.
+async fn dictate(p: &Recognizer1Proxy<'_>) -> (Vec<String>, String) {
+    let mut states = p.receive_state_changed().await.unwrap();
+    let mut partials = p.receive_partial().await.unwrap();
+    let mut finals = p.receive_final_text().await.unwrap();
+    let id = p.start(HashMap::new()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    p.stop(id).await.unwrap();
+    let f = timeout(Duration::from_secs(5), finals.next())
+        .await
+        .expect("no Final")
+        .unwrap();
+    let a = f.args().unwrap();
+    assert_eq!(a.session, id);
+    wait_done(&mut states, id).await;
+    let mut texts = Vec::new();
+    while let Ok(Some(s)) = timeout(Duration::from_millis(200), partials.next()).await {
+        let a = s.args().unwrap();
+        if a.session == id {
+            texts.push(a.text.clone());
+        }
+    }
+    (texts, a.text.clone())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_text_comes_from_the_final_stage_model() {
+    let (_d, conn) =
+        start_daemon_with_config(&[("KOEINPUT_TEST_FINAL_FAKE", "1")], FINAL_CONFIG).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert_eq!(p.final_model().await.unwrap(), "cohere-transcribe");
+    wait_final_ready(&p).await;
+    assert!(p.ready().await.unwrap());
+    let (partials, text) = dictate(&p).await;
+    assert!(text.starts_with('F') && text.len() > 1, "{text}");
+    assert!(!partials.is_empty());
+    assert!(partials.iter().all(|t| !t.starts_with('F')), "{partials:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_stage_model_loads_after_the_main_model() {
+    let gate = gate_path();
+    let (_d, conn) = start_daemon_with_config(
+        &[
+            ("KOEINPUT_TEST_FINAL_FAKE", "1"),
+            ("KOEINPUT_TEST_FINAL_LOAD_GATE", gate.to_str().unwrap()),
+        ],
+        FINAL_CONFIG,
+    )
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    assert!(!p.final_model_ready().await.unwrap());
+    let (_, text) = dictate(&p).await;
+    assert!(!text.is_empty() && !text.starts_with('F'), "{text}");
+    open_gate(&gate);
+    wait_final_ready(&p).await;
+    let (_, text) = dictate(&p).await;
+    assert!(text.starts_with('F'), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_model_load_failure_keeps_main_model() {
+    let (d, conn) =
+        start_daemon_with_config(&[("KOEINPUT_TEST_FINAL_LOAD_FAIL", "1")], FINAL_CONFIG).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    let log_path = d.dir.join("stderr.log");
+    let error_line = |log: &str| {
+        log.lines()
+            .find(|l| l.contains("test final-stage load failure"))
+            .map(str::to_string)
+    };
+    let mut log = String::new();
+    for _ in 0..100 {
+        log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if error_line(&log).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let line = error_line(&log).unwrap_or_else(|| panic!("no error line in\n{log}"));
+    assert!(line.contains("ERROR"), "{line}");
+    assert!(line.contains("cohere-transcribe"), "{line}");
+    assert!(p.ready().await.unwrap());
+    assert!(!p.final_model_ready().await.unwrap());
+    assert_eq!(p.final_model().await.unwrap(), "cohere-transcribe");
+    let (_, text) = dictate(&p).await;
+    assert!(!text.is_empty() && !text.starts_with('F'), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_started_before_the_final_model_swap_keeps_the_main_model() {
+    let gate = gate_path();
+    let (_d, conn) = start_daemon_with_config(
+        &[
+            ("KOEINPUT_TEST_FINAL_FAKE", "1"),
+            ("KOEINPUT_TEST_FINAL_LOAD_GATE", gate.to_str().unwrap()),
+        ],
+        FINAL_CONFIG,
+    )
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    let mut states = p.receive_state_changed().await.unwrap();
+    let mut finals = p.receive_final_text().await.unwrap();
+    let id = p.start(HashMap::new()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    open_gate(&gate);
+    wait_final_ready(&p).await;
+    p.stop(id).await.unwrap();
+    let f = timeout(Duration::from_secs(5), finals.next())
+        .await
+        .expect("no Final")
+        .unwrap();
+    let a = f.args().unwrap();
+    assert_eq!(a.session, id);
+    assert!(!a.text.is_empty() && !a.text.starts_with('F'), "{}", a.text);
+    wait_done(&mut states, id).await;
+    let (_, text) = dictate(&p).await;
+    assert!(text.starts_with('F'), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_model_equal_to_the_main_model_reuses_it() {
+    let (d, conn) = start_daemon_with_config(
+        &[("KOEINPUT_TEST_FINAL_LOAD_FAIL", "1")],
+        "final_model = \"fake\"\n",
+    )
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    wait_final_ready(&p).await;
+    assert_eq!(p.final_model().await.unwrap(), "fake");
+    let (_, text) = dictate(&p).await;
+    assert!(
+        !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()),
+        "{text}"
+    );
+    let log = std::fs::read_to_string(d.dir.join("stderr.log")).unwrap();
+    assert!(!log.contains("test final-stage load failure"), "{log}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -323,13 +528,22 @@ async fn loader_panic_is_reported_instead_of_loading_forever() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn start_waits_for_a_loading_model() {
-    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_DELAY_MS", "1000")]).await;
+    let gate = gate_path();
+    let (_d, conn) = start_daemon(&[("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap())]).await;
     let p = Recognizer1Proxy::new(&conn).await.unwrap();
-    let t = std::time::Instant::now();
-    let id = p.start(HashMap::new()).await.unwrap();
-    let waited = t.elapsed();
-    assert!(waited >= Duration::from_millis(700), "{waited:?}");
-    assert!(waited < Duration::from_secs(3), "{waited:?}");
+    let starting = {
+        let p = p.clone();
+        tokio::spawn(async move { p.start(HashMap::new()).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!starting.is_finished(), "Start did not wait for the load");
+    assert!(!p.ready().await.unwrap());
+    open_gate(&gate);
+    let id = timeout(Duration::from_secs(3), starting)
+        .await
+        .expect("Start did not return after the load")
+        .unwrap()
+        .unwrap();
     p.cancel(id).await.unwrap();
 }
 
@@ -366,4 +580,181 @@ async fn ready_answers_during_a_waiting_start() {
     assert!(!ready);
     let id = waiting.await.unwrap().unwrap();
     caller_p.cancel(id).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dictionary_reload_between_sessions() {
+    let (d, conn) = start_daemon(&[]).await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    wait_ready(&p).await;
+    let dict = d.dir.join("config/koeinput/dictionary.tsv");
+    let words = |to: &str| -> String { (0..6).map(|n| format!("{n}\t{to}\n")).collect() };
+
+    let (_, text) = dictate(&p).await;
+    assert!(text.chars().all(|c| c.is_ascii_digit()), "{text}");
+
+    std::fs::create_dir_all(dict.parent().unwrap()).unwrap();
+    std::fs::write(&dict, words("one")).unwrap();
+    let (_, text) = dictate(&p).await;
+    assert_eq!(text, "one");
+
+    // A session keeps the dictionary it started with.
+    let mut states = p.receive_state_changed().await.unwrap();
+    let mut finals = p.receive_final_text().await.unwrap();
+    let id = p.start(HashMap::new()).await.unwrap();
+    std::fs::write(&dict, words("twenty")).unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    p.stop(id).await.unwrap();
+    let f = timeout(Duration::from_secs(5), finals.next())
+        .await
+        .expect("no Final")
+        .unwrap();
+    assert_eq!(f.args().unwrap().text, "one");
+    wait_done(&mut states, id).await;
+    let (_, text) = dictate(&p).await;
+    assert_eq!(text, "twenty");
+
+    std::fs::remove_file(&dict).unwrap();
+    let (_, text) = dictate(&p).await;
+    assert!(text.chars().all(|c| c.is_ascii_digit()), "{text}");
+}
+
+fn log_count(d: &Daemon, needle: &str) -> usize {
+    std::fs::read_to_string(d.dir.join("stderr.log"))
+        .unwrap_or_default()
+        .matches(needle)
+        .count()
+}
+
+/// The fake loader reports "no model" while this file is missing.
+fn installed_marker() -> PathBuf {
+    let marker = gate_path();
+    let _ = std::fs::remove_file(&marker);
+    marker
+}
+
+async fn start_error(p: &Recognizer1Proxy<'_>) -> String {
+    p.start(HashMap::new()).await.unwrap_err().to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn model_installed_after_start_loads_at_the_next_start() {
+    let marker = installed_marker();
+    let (d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    let msg = start_error(&p).await;
+    assert!(msg.contains("koeinput model install"), "{msg}");
+    assert!(!p.ready().await.unwrap());
+    // A Start while the model is still missing must not start a load.
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    assert_eq!(log_count(&d, "the model is installed now"), 0);
+
+    let mut ready = p.receive_ready_changed().await;
+    open_gate(&marker);
+    let id = p.start(HashMap::new()).await.unwrap();
+    // The stream first yields the cached `false`, and the reply to Start can overtake
+    // the PropertiesChanged signal, so wait for the value to become true.
+    let became_ready = async {
+        while let Some(changed) = ready.next().await {
+            if changed.get().await.unwrap() {
+                return;
+            }
+        }
+    };
+    timeout(Duration::from_secs(3), became_ready)
+        .await
+        .expect("no PropertiesChanged for Ready");
+    assert!(p.ready().await.unwrap());
+    assert_eq!(p.model().await.unwrap(), "fake");
+    p.cancel(id).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_starts_share_one_reload() {
+    let marker = installed_marker();
+    let gate = gate_path();
+    let (d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+        ("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap()),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    open_gate(&marker);
+    let starts: Vec<_> = (0..2)
+        .map(|_| {
+            let p = p.clone();
+            tokio::spawn(async move { p.start(HashMap::new()).await })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        starts.iter().all(|s| !s.is_finished()),
+        "Start did not wait for the reload"
+    );
+    open_gate(&gate);
+    let mut ok = 0;
+    for s in starts {
+        match timeout(Duration::from_secs(3), s).await.unwrap().unwrap() {
+            Ok(id) => {
+                ok += 1;
+                p.cancel(id).await.unwrap();
+            }
+            Err(e) => {
+                let e = e.to_string();
+                assert!(e.contains("Busy") && !e.contains("NoModel"), "{e}");
+            }
+        }
+    }
+    assert_eq!(ok, 1);
+    assert_eq!(log_count(&d, "model loaded model=fake"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_waits_four_seconds_then_reports_still_loading() {
+    let marker = installed_marker();
+    let gate = gate_path();
+    let (_d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+        ("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap()),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    open_gate(&marker);
+    let t = std::time::Instant::now();
+    let msg = start_error(&p).await;
+    assert!(msg.contains("still loading"), "{msg}");
+    assert!(
+        t.elapsed() >= Duration::from_millis(3500),
+        "{:?}",
+        t.elapsed()
+    );
+    open_gate(&gate);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_load_error_is_not_retried() {
+    let marker = installed_marker();
+    let (d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+        ("KOEINPUT_TEST_LOAD_PANIC", "1"),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    open_gate(&marker);
+    let msg = start_error(&p).await;
+    assert!(msg.contains("model loading failed"), "{msg}");
+    for _ in 0..3 {
+        assert!(start_error(&p).await.contains("model loading failed"));
+    }
+    assert_eq!(log_count(&d, "model loading failed"), 1);
 }

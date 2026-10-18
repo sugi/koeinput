@@ -22,7 +22,16 @@ pub enum KoeError {
 pub enum Readiness {
     Loading,
     Ready(Arc<Engine>),
+    /// The model is not installed; a Start checks again, since it may have been installed since.
+    NoModel(String),
+    /// A failure that a Start does not retry.
     Missing(String),
+}
+
+/// Lets a Start load a model that was installed after the daemon started.
+pub struct Reloader {
+    pub installed: Box<dyn Fn() -> bool + Send + Sync>,
+    pub spawn: Box<dyn Fn() + Send + Sync>,
 }
 
 pub struct Current {
@@ -36,9 +45,13 @@ pub struct Shared {
     pub current: Option<Current>,
     pub next_id: u32,
     pub model: String,
+    /// The configured final-stage model id, empty when none.
+    pub final_model: String,
+    pub final_ready: bool,
     pub source: Option<String>,
     pub test_source: bool,
     pub load_finished: tokio::sync::watch::Sender<bool>,
+    pub dictionary: koeinput_core::postprocess::DictionaryWatch,
 }
 
 /// How long a Start waits for a model that is still loading, e.g. right after D-Bus activation.
@@ -47,6 +60,8 @@ const LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
 
 pub struct Recognizer1 {
     pub shared: Arc<Mutex<Shared>>,
+    /// Set once the interface is served, since the loader needs the interface reference.
+    pub reloader: Arc<std::sync::OnceLock<Reloader>>,
 }
 
 #[interface(name = "org.nemui.KoeInput.Recognizer1")]
@@ -67,6 +82,26 @@ impl Recognizer1 {
             .to_owned();
         let emitter =
             SignalEmitter::new(conn, OBJECT_PATH)?.set_destination(BusName::Unique(owner.clone()));
+        let no_model = matches!(self.shared.lock().unwrap().readiness, Readiness::NoModel(_));
+        if no_model
+            && let Some(reloader) = self.reloader.get()
+            && tokio::task::block_in_place(|| (reloader.installed)())
+        {
+            // Another Start may have begun the load meanwhile, and shutdown may have begun.
+            let begin = {
+                let mut s = self.shared.lock().unwrap();
+                let begin = matches!(s.readiness, Readiness::NoModel(_));
+                if begin {
+                    s.readiness = Readiness::Loading;
+                    s.load_finished.send_replace(false);
+                }
+                begin
+            };
+            if begin {
+                tracing::info!("the model is installed now; loading it");
+                (reloader.spawn)();
+            }
+        }
         let mut load_finished = {
             let s = self.shared.lock().unwrap();
             matches!(s.readiness, Readiness::Loading).then(|| s.load_finished.subscribe())
@@ -80,13 +115,23 @@ impl Recognizer1 {
             if s.current.is_some() {
                 return Err(KoeError::Busy("a session is already running".into()));
             }
-            let engine = match &s.readiness {
+            let mut engine = match &s.readiness {
                 Readiness::Ready(e) => e.clone(),
                 Readiness::Loading => {
                     return Err(KoeError::NoModel("the model is still loading".into()));
                 }
-                Readiness::Missing(hint) => return Err(KoeError::NoModel(hint.clone())),
+                Readiness::NoModel(hint) | Readiness::Missing(hint) => {
+                    return Err(KoeError::NoModel(hint.clone()));
+                }
             };
+            // One metadata call per session; the small TSV is read under the lock only after a change.
+            if let Some(post) = s.dictionary.reload() {
+                engine = Arc::new(Engine {
+                    post: Arc::new(post),
+                    ..Engine::clone(&engine)
+                });
+                s.readiness = Readiness::Ready(engine.clone());
+            }
             s.next_id += 1;
             let id = s.next_id;
             let source = if s.test_source {
@@ -135,6 +180,16 @@ impl Recognizer1 {
     #[zbus(property)]
     async fn model(&self) -> String {
         self.shared.lock().unwrap().model.clone()
+    }
+
+    #[zbus(property)]
+    async fn final_model(&self) -> String {
+        self.shared.lock().unwrap().final_model.clone()
+    }
+
+    #[zbus(property)]
+    async fn final_model_ready(&self) -> bool {
+        self.shared.lock().unwrap().final_ready
     }
 
     #[zbus(property)]
@@ -196,6 +251,26 @@ pub fn test_delay(var: &str) -> Option<std::time::Duration> {
         .parse()
         .ok()
         .map(std::time::Duration::from_millis)
+}
+
+/// The fake "no model installed" condition: `KOEINPUT_TEST_NO_MODEL=1`, lifted once the file named
+/// by `KOEINPUT_TEST_NO_MODEL_FILE` exists.
+#[cfg(feature = "test-hooks")]
+pub fn test_no_model() -> bool {
+    std::env::var("KOEINPUT_TEST_NO_MODEL").as_deref() == Ok("1")
+        && !std::env::var("KOEINPUT_TEST_NO_MODEL_FILE")
+            .is_ok_and(|f| std::path::Path::new(&f).exists())
+}
+
+/// Blocks until the file named by `var` exists, so a test decides when a load may finish.
+#[cfg(feature = "test-hooks")]
+pub fn test_gate(var: &str) {
+    let Ok(path) = std::env::var(var) else {
+        return;
+    };
+    while !std::path::Path::new(&path).exists() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 async fn caller_present(conn: &Connection, owner: &UniqueName<'static>) -> zbus::Result<bool> {

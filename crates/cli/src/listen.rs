@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
+use koeinput_core::config::Paths;
 use koeinput_dbus_api::Recognizer1Proxy;
 use std::collections::HashMap;
 use std::io::Write;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-const NOT_RUNNING: &str =
-    "daemon not running (start it with: systemctl --user start koeinput; in a development checkout, run target/release/koeinput-daemon)";
+const NOT_RUNNING: &str = "daemon not running (start it with: systemctl --user start koeinput; in a development checkout, run target/release/koeinput-daemon)";
 
 fn runtime() -> Result<tokio::runtime::Runtime> {
     Ok(tokio::runtime::Builder::new_multi_thread()
@@ -15,7 +15,10 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .build()?)
 }
 
-pub fn status() -> Result<()> {
+pub fn status(paths: &Paths) -> Result<()> {
+    let final_skipped = koeinput_core::config::load(&paths.config_file)
+        .map(|c| c.final_full_max_ms == 0)
+        .unwrap_or(false);
     runtime()?.block_on(async {
         let conn = zbus::Connection::session()
             .await
@@ -24,9 +27,40 @@ pub fn status() -> Result<()> {
         let ready = p.ready().await.context(NOT_RUNNING)?;
         println!("ready: {}", if ready { "yes" } else { "no" });
         println!("model: {}", p.model().await?);
+        if let Some(line) = final_model_status(
+            p.final_model().await,
+            p.final_model_ready().await,
+            final_skipped,
+        ) {
+            println!("{line}");
+        }
         println!("version: {}", p.version().await?);
         Ok(())
     })
+}
+
+/// A daemon started before an upgrade lacks the properties; it has no final-stage model.
+fn final_model_status(
+    model: zbus::Result<String>,
+    ready: zbus::Result<bool>,
+    skipped: bool,
+) -> Option<String> {
+    final_model_line(&model.unwrap_or_default(), ready.unwrap_or(false), skipped)
+}
+
+/// `skipped`: the local config has `final_full_max_ms = 0`, so the daemon never loads the model.
+fn final_model_line(id: &str, ready: bool, skipped: bool) -> Option<String> {
+    if id.is_empty() {
+        return None;
+    }
+    let state = if ready {
+        "ready"
+    } else if skipped {
+        "skipped because final_full_max_ms is 0"
+    } else {
+        "not loaded yet or failed, see journalctl --user -u koeinput"
+    };
+    Some(format!("final model: {id} ({state})"))
 }
 
 pub fn run() -> Result<()> {
@@ -129,4 +163,51 @@ async fn listen() -> Result<()> {
         let _ = p.cancel(id).await;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn final_model_line_shows_state_or_nothing() {
+        assert_eq!(final_model_line("", false, false), None);
+        assert_eq!(final_model_line("", true, false), None);
+        assert_eq!(
+            final_model_line("cohere-transcribe", true, false).as_deref(),
+            Some("final model: cohere-transcribe (ready)")
+        );
+        assert_eq!(
+            final_model_line("cohere-transcribe", false, false).as_deref(),
+            Some(
+                "final model: cohere-transcribe (not loaded yet or failed, see journalctl --user -u koeinput)"
+            )
+        );
+    }
+
+    #[test]
+    fn final_model_line_says_when_the_stage_is_switched_off() {
+        assert_eq!(
+            final_model_line("cohere-transcribe", false, true).as_deref(),
+            Some("final model: cohere-transcribe (skipped because final_full_max_ms is 0)")
+        );
+        assert_eq!(
+            final_model_line("cohere-transcribe", true, true).as_deref(),
+            Some("final model: cohere-transcribe (ready)")
+        );
+    }
+
+    #[test]
+    fn status_without_the_final_model_properties_prints_no_line() {
+        let missing = || zbus::Error::InterfaceNotFound;
+        assert_eq!(
+            final_model_status(Err(missing()), Err(missing()), false),
+            None
+        );
+        assert_eq!(
+            final_model_status(Ok("m".into()), Err(missing()), false).as_deref(),
+            Some("final model: m (not loaded yet or failed, see journalctl --user -u koeinput)")
+        );
+        assert_eq!(final_model_status(Ok(String::new()), Ok(true), false), None);
+    }
 }

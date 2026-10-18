@@ -44,6 +44,8 @@ pub struct SessionConfig {
     pub tail: usize,
     pub min_length: usize,
     pub max_length: usize,
+    /// Longest span (first speech to end of recording) decoded at once for the final text; 0 = off.
+    pub final_full_max: usize,
 }
 
 impl SessionConfig {
@@ -54,6 +56,7 @@ impl SessionConfig {
             tail: ms(c.tail_ms),
             min_length: ms(c.min_length_ms),
             max_length: ms(c.max_length_ms),
+            final_full_max: ms(c.final_full_max_ms),
         }
     }
 }
@@ -61,9 +64,11 @@ impl SessionConfig {
 pub struct Session {
     cfg: SessionConfig,
     rec: Arc<dyn Recognizer>,
+    final_rec: Option<Arc<dyn Recognizer>>,
     vad: Box<dyn Vad>,
     post: Arc<PostProcessor>,
     audio: Vec<f32>,
+    first_speech: Option<usize>,
     fixed: Vec<String>,
     last_partial: String,
     next_tick: usize,
@@ -82,9 +87,11 @@ impl Session {
         Self {
             cfg,
             rec,
+            final_rec: None,
             vad,
             post,
             audio: Vec::new(),
+            first_speech: None,
             fixed: Vec::new(),
             last_partial: String::new(),
             next_tick: cfg.partial_interval,
@@ -92,6 +99,12 @@ impl Session {
             len_at_stop: None,
             state: State::Starting,
         }
+    }
+
+    /// Decodes the whole-utterance final text; partials and the segment-join fallback keep using the main recognizer.
+    pub fn with_final_recognizer(mut self, rec: Option<Arc<dyn Recognizer>>) -> Self {
+        self.final_rec = rec;
+        self
     }
 
     pub fn state(&self) -> State {
@@ -194,17 +207,45 @@ impl Session {
     }
 
     fn decode(&self, seg: Segment) -> Result<String, RecognizerError> {
+        self.decode_span(&*self.rec, seg)
+    }
+
+    fn decode_span(&self, rec: &dyn Recognizer, seg: Segment) -> Result<String, RecognizerError> {
         let s = seg.start.saturating_sub(PAD);
         let e = (seg.end + PAD).min(self.audio.len());
-        self.rec.decode(&self.audio[s..e])
+        rec.decode(&self.audio[s..e])
     }
 
     fn fix_finished(&mut self) -> Result<(), RecognizerError> {
         for seg in self.vad.pop_finished() {
+            self.first_speech.get_or_insert(seg.start);
             let t = self.decode(seg)?;
             self.fixed.push(t);
         }
         Ok(())
+    }
+
+    fn whole_utterance(&self) -> Option<Segment> {
+        let start = self.first_speech?;
+        let end = self.audio.len();
+        let max = self.cfg.final_full_max;
+        (max > 0 && end.saturating_sub(start) <= max).then_some(Segment { start, end })
+    }
+
+    fn final_text(&mut self) -> Result<String, RecognizerError> {
+        let rest = self.vad.finish();
+        if let Some(seg) = rest.first() {
+            self.first_speech.get_or_insert(seg.start);
+        }
+        if let Some(span) = self.whole_utterance() {
+            let rec = self.final_rec.as_deref().unwrap_or(&*self.rec);
+            return self.decode_span(rec, span);
+        }
+        for seg in rest {
+            let t = self.decode(seg)?;
+            self.fixed.push(t);
+        }
+        Ok(join_segments(&self.fixed))
     }
 
     fn partial_text(&self) -> Result<String, RecognizerError> {
@@ -220,17 +261,15 @@ impl Session {
 
     fn finalize(&mut self) -> Vec<Event> {
         let mut ev = Vec::new();
-        for seg in self.vad.finish() {
-            match self.decode(seg) {
-                Ok(t) => self.fixed.push(t),
-                Err(e) => return self.fail(ev, e),
-            }
-        }
+        let text = match self.final_text() {
+            Ok(t) => t,
+            Err(e) => return self.fail(ev, e),
+        };
         let speech_len = self.len_at_stop.unwrap_or(self.audio.len());
         let text = if speech_len < self.cfg.min_length {
             String::new()
         } else {
-            self.post.apply(&join_segments(&self.fixed))
+            self.post.apply(&text)
         };
         self.state = State::Done;
         ev.push(Event::Final(text));
@@ -253,6 +292,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::testing::{FakeRecognizer, FakeVad};
+    use std::sync::Mutex;
 
     const S: usize = 16000;
 
@@ -262,6 +302,7 @@ mod tests {
             tail: S / 4,
             min_length: S / 2,
             max_length: 10 * S,
+            final_full_max: 30 * S,
         }
     }
 
@@ -344,15 +385,23 @@ mod tests {
 
     #[test]
     fn finished_segments_are_fixed_and_ordered() {
-        let mut s = session(
+        let mut s = Session::new(
+            SessionConfig {
+                final_full_max: 0,
+                ..cfg()
+            },
             rec(),
-            vec![
-                Segment { start: 0, end: S },
-                Segment {
-                    start: 2 * S,
-                    end: 3 * S,
-                },
-            ],
+            Box::new(FakeVad::new(
+                vec![
+                    Segment { start: 0, end: S },
+                    Segment {
+                        start: 2 * S,
+                        end: 3 * S,
+                    },
+                ],
+                S / 4,
+            )),
+            Arc::new(PostProcessor::empty()),
         );
         let mut ev = s.push(&audio(&[(S, 0.1), (S, 0.0), (S, 0.2), (S, 0.0)]));
         ev.extend(s.end_of_audio());
@@ -597,6 +646,7 @@ mod tests {
             tail_ms: 250,
             min_length_ms: 300,
             max_length_ms: 120_000,
+            final_full_max_ms: 30_000,
             ..Config::default()
         };
         let sc = SessionConfig::from_config(&c);
@@ -604,5 +654,250 @@ mod tests {
         assert_eq!(sc.tail, 4000);
         assert_eq!(sc.min_length, 4800);
         assert_eq!(sc.max_length, 1_920_000);
+        assert_eq!(sc.final_full_max, 480_000);
+    }
+
+    const A: Segment = Segment {
+        start: S / 2,
+        end: 3 * S / 2,
+    };
+    // Still open when the recording stops.
+    const B: Segment = Segment {
+        start: 5 * S / 2,
+        end: 5 * S,
+    };
+    const SPOKEN: usize = 4 * S;
+    const END: usize = SPOKEN + S / 4;
+
+    type Spans = Arc<Mutex<Vec<(usize, usize)>>>;
+
+    // Sample i holds the value i, so the fake can tell which span of the recording it decoded.
+    fn positions(range: std::ops::Range<usize>) -> Vec<f32> {
+        range.map(|i| i as f32).collect()
+    }
+
+    fn span_rec(fail: fn(usize, usize) -> bool) -> (Arc<FakeRecognizer>, Spans) {
+        tagged_span_rec("", fail)
+    }
+
+    fn tagged_span_rec(
+        tag: &'static str,
+        fail: fn(usize, usize) -> bool,
+    ) -> (Arc<FakeRecognizer>, Spans) {
+        let spans = Spans::default();
+        let log = spans.clone();
+        let r = FakeRecognizer::new(move |s| {
+            let (Some(first), Some(last)) = (s.first(), s.last()) else {
+                return Ok(String::new());
+            };
+            let (a, b) = (*first as usize, *last as usize + 1);
+            log.lock().unwrap().push((a, b));
+            if fail(a, b) {
+                return Err(RecognizerError::Decode("boom".into()));
+            }
+            // The filler is removed by post-processing, so the results show it ran.
+            Ok(format!("えー{tag}[{a}-{b}]"))
+        });
+        (Arc::new(r), spans)
+    }
+
+    fn never(_: usize, _: usize) -> bool {
+        false
+    }
+
+    fn text(a: usize, b: usize) -> String {
+        format!("[{a}-{b}]")
+    }
+
+    struct Spoken {
+        partials: Vec<String>,
+        early_spans: Vec<(usize, usize)>,
+        after_stop: Vec<Event>,
+        final_spans: Vec<(usize, usize)>,
+    }
+
+    // Speaks for SPOKEN samples in 0.1 s pushes, stops, then delivers the tail in one push.
+    fn speak_and_stop(
+        final_full_max: usize,
+        segs: Vec<Segment>,
+        fail: fn(usize, usize) -> bool,
+    ) -> Spoken {
+        speak_and_stop_with(final_full_max, segs, fail, None)
+    }
+
+    fn speak_and_stop_with(
+        final_full_max: usize,
+        segs: Vec<Segment>,
+        fail: fn(usize, usize) -> bool,
+        final_rec: Option<Arc<dyn Recognizer>>,
+    ) -> Spoken {
+        let (r, spans) = span_rec(fail);
+        let mut s = Session::new(
+            SessionConfig {
+                final_full_max,
+                ..cfg()
+            },
+            r,
+            Box::new(FakeVad::new(segs, S / 4)),
+            Arc::new(PostProcessor::empty()),
+        )
+        .with_final_recognizer(final_rec);
+        let mut ev = Vec::new();
+        for chunk in positions(0..SPOKEN).chunks(1600) {
+            ev.extend(s.push(chunk));
+        }
+        let partials = ev
+            .iter()
+            .filter_map(|e| match e {
+                Event::Partial(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        let early_spans = spans.lock().unwrap().clone();
+        let mut after_stop = s.stop();
+        after_stop.extend(s.push(&positions(SPOKEN..END)));
+        assert!(s.is_finished(), "{after_stop:?}");
+        let final_spans = spans.lock().unwrap()[early_spans.len()..].to_vec();
+        Spoken {
+            partials,
+            early_spans,
+            after_stop,
+            final_spans,
+        }
+    }
+
+    #[test]
+    fn final_decodes_whole_utterance() {
+        let run = speak_and_stop(30 * S, vec![A, B], never);
+        assert_eq!(run.final_spans, vec![(A.start - PAD, END)]);
+        assert_eq!(finals(&run.after_stop), vec![text(A.start - PAD, END)]);
+        assert_eq!(run.after_stop.last(), Some(&Event::State(State::Done)));
+        assert_eq!(
+            run.partials.last(),
+            Some(&(text(A.start - PAD, A.end + PAD) + &text(B.start - PAD, SPOKEN)))
+        );
+        assert!(
+            run.early_spans
+                .iter()
+                .all(|&(a, b)| b <= A.end + PAD || a >= B.start - PAD),
+            "{:?}",
+            run.early_spans
+        );
+    }
+
+    #[test]
+    fn whole_utterance_runs_to_the_end_of_the_recording() {
+        let closed = Segment {
+            start: 5 * S / 2,
+            end: 7 * S / 2,
+        };
+        let run = speak_and_stop(30 * S, vec![A, closed], never);
+        assert!(
+            run.early_spans
+                .contains(&(closed.start - PAD, closed.end + PAD)),
+            "closed before stop: {:?}",
+            run.early_spans
+        );
+        assert_eq!(run.final_spans, vec![(A.start - PAD, END)]);
+        assert_eq!(finals(&run.after_stop), vec![text(A.start - PAD, END)]);
+    }
+
+    #[test]
+    fn long_utterance_falls_back_to_segment_join() {
+        let span = END - A.start;
+        let run = speak_and_stop(span, vec![A, B], never);
+        assert_eq!(run.final_spans, vec![(A.start - PAD, END)], "at the limit");
+
+        let run = speak_and_stop(span - 1, vec![A, B], never);
+        assert_eq!(run.final_spans, vec![(B.start - PAD, END)]);
+        assert_eq!(
+            finals(&run.after_stop),
+            vec![text(A.start - PAD, A.end + PAD) + &text(B.start - PAD, END)]
+        );
+    }
+
+    #[test]
+    fn final_full_disabled_with_zero() {
+        let run = speak_and_stop(0, vec![A, B], never);
+        assert_eq!(run.final_spans, vec![(B.start - PAD, END)]);
+        assert_eq!(
+            finals(&run.after_stop),
+            vec![text(A.start - PAD, A.end + PAD) + &text(B.start - PAD, END)]
+        );
+    }
+
+    #[test]
+    fn whole_utterance_decode_error_reports_model_error() {
+        let run = speak_and_stop(30 * S, vec![A, B], |a, b| a <= A.start && b > B.start);
+        assert!(
+            !run.early_spans
+                .iter()
+                .any(|&(a, b)| a <= A.start && b > B.start)
+        );
+        assert_eq!(run.final_spans, vec![(A.start - PAD, END)]);
+        assert_model_error(&run.after_stop);
+    }
+
+    struct FinalStage {
+        run: Spoken,
+        calls: usize,
+        spans: Vec<(usize, usize)>,
+    }
+
+    fn with_final_stage(final_full_max: usize, final_fail: fn(usize, usize) -> bool) -> FinalStage {
+        let (f, spans) = tagged_span_rec("F", final_fail);
+        let run = speak_and_stop_with(final_full_max, vec![A, B], never, Some(f.clone()));
+        let spans = spans.lock().unwrap().clone();
+        FinalStage {
+            run,
+            calls: f.calls(),
+            spans,
+        }
+    }
+
+    #[test]
+    fn final_stage_recognizer_decodes_the_whole_utterance() {
+        let fs = with_final_stage(30 * S, never);
+        assert_eq!(fs.spans, vec![(A.start - PAD, END)]);
+        assert_eq!(
+            finals(&fs.run.after_stop),
+            vec![format!("F{}", text(A.start - PAD, END))]
+        );
+        assert!(fs.run.final_spans.is_empty(), "{:?}", fs.run.final_spans);
+        assert_eq!(
+            fs.run.partials.last(),
+            Some(&(text(A.start - PAD, A.end + PAD) + &text(B.start - PAD, SPOKEN)))
+        );
+        assert_eq!(fs.run.after_stop.last(), Some(&Event::State(State::Done)));
+    }
+
+    #[test]
+    fn over_the_limit_the_main_recognizer_joins_the_segments() {
+        let fs = with_final_stage(END - A.start - 1, never);
+        assert_eq!(fs.calls, 0, "{:?}", fs.spans);
+        assert_eq!(fs.run.final_spans, vec![(B.start - PAD, END)]);
+        assert_eq!(
+            finals(&fs.run.after_stop),
+            vec![text(A.start - PAD, A.end + PAD) + &text(B.start - PAD, END)]
+        );
+        let fs = with_final_stage(0, never);
+        assert_eq!(fs.calls, 0, "{:?}", fs.spans);
+    }
+
+    #[test]
+    fn final_stage_decode_error_reports_model_error() {
+        let fs = with_final_stage(30 * S, |_, _| true);
+        assert_eq!(fs.calls, 1);
+        assert!(fs.run.final_spans.is_empty(), "{:?}", fs.run.final_spans);
+        assert_model_error(&fs.run.after_stop);
+    }
+
+    #[test]
+    fn no_speech_still_gives_empty_final() {
+        let run = speak_and_stop(30 * S, vec![], never);
+        assert!(run.early_spans.is_empty(), "{:?}", run.early_spans);
+        assert!(run.final_spans.is_empty(), "{:?}", run.final_spans);
+        assert_eq!(finals(&run.after_stop), vec![String::new()]);
+        assert_eq!(run.after_stop.last(), Some(&Event::State(State::Done)));
     }
 }

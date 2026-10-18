@@ -48,6 +48,64 @@ fn model_use_writes_config() {
 }
 
 #[test]
+fn model_use_final_sets_and_clears_the_final_stage_model() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    let run = |args: &[&str]| koeinput(home.path()).args(args).output().unwrap();
+    let out = run(&["model", "use", "parakeet-ja"]);
+    assert!(out.status.success());
+
+    let out = run(&["model", "use", "cohere-transcribe", "--final"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("koeinput model install cohere-transcribe"),
+        "{stdout}"
+    );
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(cfg.contains("final_model = \"cohere-transcribe\""), "{cfg}");
+    assert!(cfg.contains("model = \"parakeet-ja\""), "{cfg}");
+
+    let out = run(&["model", "list"]);
+    let list = String::from_utf8(out.stdout).unwrap();
+    let marked: Vec<_> = list.lines().filter(|l| l.contains("final model")).collect();
+    assert_eq!(marked.len(), 1, "{list}");
+    assert!(marked[0].starts_with("cohere-transcribe "), "{list}");
+
+    let out = run(&["model", "use", "--final", "none"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!cfg.contains("cohere-transcribe"), "{cfg}");
+    assert!(cfg.contains("model = \"parakeet-ja\""), "{cfg}");
+    let out = run(&["model", "list"]);
+    assert!(
+        !String::from_utf8(out.stdout)
+            .unwrap()
+            .contains("final model")
+    );
+
+    for args in [
+        &["model", "use", "none"][..],
+        &["model", "use", "silero-vad", "--final"],
+        &["model", "use", "nope", "--final"],
+        &["model", "use", "--final"],
+    ] {
+        let out = run(args);
+        assert!(!out.status.success(), "{args:?} succeeded");
+    }
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!cfg.contains("final_model = \"silero-vad\""), "{cfg}");
+}
+
+#[test]
 fn transcribe_without_model_explains_how_to_install() {
     let home = tempfile::tempdir().unwrap();
     let out = koeinput(home.path())
@@ -91,10 +149,162 @@ fn manpage_is_hidden_roff_that_documents_the_commands() {
     let plain = text.replace('\\', "");
     assert!(plain.contains("--from-file"));
     assert!(plain.contains("--partials"));
+    assert!(plain.contains("--final"));
+    for want in [
+        "dict add",
+        "dict remove",
+        "dict list",
+        "editing the file by hand",
+        "DICTIONARY FILE",
+        "a tab",
+        "lines starting with # are ignored",
+    ] {
+        assert!(plain.contains(want), "{want}");
+    }
     assert!(!plain.contains("manpage"));
     for sub in ["listen", "status", "transcribe", "model", "help"] {
         assert!(!plain.contains(&format!("koeinput-{sub}(1)")), "{sub}");
     }
     let help = koeinput(home.path()).arg("--help").output().unwrap();
     assert!(!String::from_utf8(help.stdout).unwrap().contains("manpage"));
+}
+
+fn dict_path(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".config/koeinput/dictionary.tsv")
+}
+
+#[test]
+fn dict_add_twice_replaces_and_keeps_comments() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    std::fs::create_dir_all(dict_path(home.path()).parent().unwrap()).unwrap();
+    std::fs::write(dict_path(home.path()), "# words\nx\ty\n").unwrap();
+    assert!(run(&["add", "foo", "bar"]).status.success());
+    let out = run(&["add", "foo", "baz"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8(out.stdout).unwrap().contains("replaced"));
+    assert_eq!(
+        std::fs::read_to_string(dict_path(home.path())).unwrap(),
+        "# words\nx\ty\nfoo\tbaz\n"
+    );
+}
+
+#[test]
+fn dict_add_refuses_a_tab_and_an_empty_form() {
+    let home = tempfile::tempdir().unwrap();
+    for args in [["add", "a\tb", "c"], ["add", "", "c"]] {
+        let out = koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+    }
+    assert!(!dict_path(home.path()).exists());
+}
+
+#[test]
+fn dict_remove_reports_a_missing_entry() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(run(&["add", "a", "b"]).status.success());
+    let out = run(&["remove", "zzz"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("no entry for zzz")
+    );
+    assert!(run(&["remove", "a"]).status.success());
+    assert_eq!(std::fs::read_to_string(dict_path(home.path())).unwrap(), "");
+}
+
+#[test]
+fn dict_list_prints_entries_and_nothing_for_a_missing_file() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        koeinput(home.path())
+            .arg("dict")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = run(&["list"]);
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    run(&["add", "a", "b"]);
+    run(&["add", "c", "d"]);
+    let out = run(&["list"]);
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "a\tb\nc\td\n");
+}
+
+#[test]
+fn model_use_final_refuses_the_main_model() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    let run = |args: &[&str]| koeinput(home.path()).args(args).output().unwrap();
+    let refused = |out: &std::process::Output| {
+        assert!(!out.status.success());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("already the main model"), "{err}");
+    };
+    refused(&run(&["model", "use", "parakeet-ja", "--final"]));
+    assert!(!cfg_path.exists());
+
+    assert!(run(&["model", "use", "zipformer-ja"]).status.success());
+    refused(&run(&["model", "use", "zipformer-ja", "--final"]));
+    let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+    assert!(!cfg.contains("final_model"), "{cfg}");
+    assert!(
+        run(&["model", "use", "parakeet-ja", "--final"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn model_use_errors_name_the_config_file() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    std::fs::create_dir_all(&cfg_path).unwrap();
+    let out = koeinput(home.path())
+        .args(["model", "use", "zipformer-ja"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(&cfg_path.display().to_string()), "{err}");
+}
+
+#[test]
+fn model_list_with_an_invalid_config_warns_and_lists() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_path = home.path().join(".config/koeinput/config.toml");
+    std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+    std::fs::write(&cfg_path, "threads = 0\n").unwrap();
+    let out = koeinput(home.path())
+        .args(["model", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("parakeet-ja"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("threads"), "{err}");
+    assert!(err.contains(&cfg_path.display().to_string()), "{err}");
 }

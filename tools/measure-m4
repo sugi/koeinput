@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""Measures the M4 recognition changes on the evaluation recordings.
+
+Runs `koeinput transcribe` (release build) over the items of work/eval-data/references.jsonl
+in several modes and writes summary.md with aggregate numbers only.
+The raw outputs contain recognized text. They stay in the output directory (mode 0700) and
+must never be committed, quoted or copied into documents.
+
+Usage: tools/measure-m4 [--work DIR] [--out DIR] [--bin KOEINPUT] [--modes a,b,...] [--score-only]
+
+Run it in the outer dev container, not through scripts/dev, so that the recognizer runs at
+normal priority while the load (when a mode asks for it) runs at nice 10.
+The measurement HOME (work/home) needs parakeet-ja and silero-vad; the cohere modes also need
+cohere-transcribe (`koeinput model install cohere-transcribe --from-file <archive>`).
+"""
+import argparse
+import ctypes
+import datetime
+import json
+import os
+import random
+import re
+import resource
+import signal
+import subprocess
+import sys
+import time
+import unicodedata
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TICK_S = 0.5
+CHUNK_EPS = 0.03
+BOUNDARY_TOLERANCE = 2
+SENTENCE_ENDS = "。！？!?．"
+MARK_BASE = 0xE010
+
+# name: (config keys, threads, CPU load, uses the filler-marking dictionary)
+MODES = {
+    "join": ({"final_full_max_ms": 0}, 8, False, False),
+    "whole": ({}, 8, False, False),
+    "cohere": ({"final_model": "cohere-transcribe"}, 8, False, False),
+    "idle-t4": ({}, 4, False, False),
+    "idle-t16": ({}, 16, False, False),
+    "load-t4": ({}, 4, True, False),
+    "load-t8": ({}, 8, True, False),
+    "load-t16": ({}, 16, True, False),
+    "load-cohere": ({"final_model": "cohere-transcribe"}, 8, True, False),
+    "fillers-whole": ({}, 8, False, True),
+    "fillers-cohere": ({"final_model": "cohere-transcribe"}, 8, False, True),
+}
+NEEDS = {name: "cohere-transcribe" for name in MODES if "cohere" in name}
+
+PARTIAL = re.compile(r"^  \[(\d+\.\d+) s\] (.*)$")
+STATS = re.compile(r"^  audio (\d+\.\d+) s, final (\d+\.\d+) s after end of audio$")
+TAGS = re.compile(r"<asr_text>|\[BLANK_AUDIO\]", re.I)
+
+
+# ---- text helpers (normalization as in the M0 spike's score.py) ----
+
+def norm(s):
+    s = unicodedata.normalize("NFKC", TAGS.sub("", s)).lower()
+    return "".join(c for c in s if unicodedata.category(c)[0] not in "PSZ"
+                   and not c.isspace() and unicodedata.category(c) != "Cc")
+
+
+def is_japanese(c):
+    o = ord(c)
+    return (0x3000 <= o <= 0x303F or 0x3040 <= o <= 0x309F or 0x30A0 <= o <= 0x30FF
+            or 0x3400 <= o <= 0x4DBF or 0x4E00 <= o <= 0x9FFF or 0xF900 <= o <= 0xFAFF
+            or 0xFF00 <= o <= 0xFFEF)
+
+
+def remove_japanese_spaces(text):
+    """Same rule as postprocess.rs: a space goes when its nearest non-space neighbours are both Japanese."""
+    chars = list(text.strip())
+    out = []
+    for i, c in enumerate(chars):
+        if c in " 　":
+            prev = next((x for x in reversed(chars[:i]) if x not in " 　"), None)
+            nxt = next((x for x in chars[i + 1:] if x not in " 　"), None)
+            if prev and nxt and is_japanese(prev) and is_japanese(nxt):
+                continue
+        out.append(c)
+    return "".join(out)
+
+
+def align(ref, hyp):
+    """Edit distance and, for each hyp boundary index, the range of ref indices on one optimal path."""
+    n, m = len(ref), len(hyp)
+    d = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        d[i][0] = i
+    for j in range(m + 1):
+        d[0][j] = j
+    for i in range(1, n + 1):
+        ri = ref[i - 1]
+        row, prev = d[i], d[i - 1]
+        for j in range(1, m + 1):
+            row[j] = min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (ri != hyp[j - 1]))
+    i, j = n, m
+    spans = {m: [n, n]}
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and d[i][j] == d[i - 1][j - 1] + (ref[i - 1] != hyp[j - 1]):
+            i, j = i - 1, j - 1
+        elif i > 0 and d[i][j] == d[i - 1][j] + 1:
+            i -= 1
+        else:
+            j -= 1
+        s = spans.setdefault(j, [i, i])
+        s[0], s[1] = min(s[0], i), max(s[1], i)
+    return d[n][m], spans
+
+
+def distance(ref, hyp):
+    return align(ref, hyp)[0]
+
+
+def boundaries(text, chars):
+    """Normalized-character offsets of the given punctuation marks in raw text."""
+    return [len(norm(text[:p])) for p, c in enumerate(text) if c in chars]
+
+
+def mid_sentence_periods(ref, hyp):
+    """`。` in hyp that has more text after it, where the reference has no sentence end nearby."""
+    rn, hn = norm(ref), norm(hyp)
+    _, spans = align(rn, hn)
+    ref_ends = set(boundaries(ref, SENTENCE_ENDS)) | {len(rn)}
+    inner = mid = 0
+    for k in boundaries(hyp, "。"):
+        if k >= len(hn):
+            continue
+        inner += 1
+        lo, hi = spans.get(k, [0, len(rn)])
+        if not any(lo - BOUNDARY_TOLERANCE <= b <= hi + BOUNDARY_TOLERANCE for b in ref_ends):
+            mid += 1
+    return inner, mid
+
+
+def inner_periods(hyp):
+    hn = norm(hyp)
+    return sum(1 for k in boundaries(hyp, "。") if k < len(hn))
+
+
+def pctl(values, q):
+    v = sorted(values)
+    if not v:
+        return None
+    r = q / 100 * (len(v) - 1)
+    lo = int(r)
+    hi = min(lo + 1, len(v) - 1)
+    return v[lo] + (v[hi] - v[lo]) * (r - lo)
+
+
+def cer_with_ci(pairs, seed=0, rounds=1000):
+    per = [(distance(r, h), len(r)) for r, h in pairs]
+    if not per:
+        return None
+    total = sum(e for e, _ in per) / sum(n for _, n in per)
+    rng = random.Random(seed)
+    boot = []
+    for _ in range(rounds):
+        sample = [per[rng.randrange(len(per))] for _ in per]
+        boot.append(sum(e for e, _ in sample) / max(1, sum(n for _, n in sample)))
+    return total, pctl(boot, 2.5), pctl(boot, 97.5)
+
+
+# ---- running ----
+
+def fillers_from_source():
+    src = (ROOT / "crates/core/src/postprocess.rs").read_text(encoding="utf-8")
+    block = re.search(r"const FILLERS: \[&str; \d+\] = \[(.*?)\];", src, re.S)
+    return re.findall(r'"([^"]+)"', block.group(1))
+
+
+def model_installed(home, model_id):
+    catalog = (ROOT / "data/models.toml").read_text(encoding="utf-8")
+    for block in catalog.split("[[model]]"):
+        if re.search(rf'^id = "{re.escape(model_id)}"$', block, re.M):
+            files = re.search(r"^files = \{(.*)\}$", block, re.M).group(1)
+            names = re.findall(r'"([^"]+)"', files)
+            d = home / ".local/share/koeinput/models" / model_id
+            return all((d / f).exists() for f in names)
+    return False
+
+
+def write_config(cfg_home, keys, threads, fillers):
+    d = cfg_home / "koeinput"
+    d.mkdir(parents=True, exist_ok=True)
+    lines = [f"threads = {threads}"]
+    for k, v in keys.items():
+        lines.append(f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}")
+    (d / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    dict_file = d / "dictionary.tsv"
+    if fillers:
+        dict_file.write_text("".join(f"{f}\t{chr(MARK_BASE + i)}\n" for i, f in enumerate(fillers)),
+                             encoding="utf-8")
+    elif dict_file.exists():
+        dict_file.unlink()
+
+
+class Load:
+    """One nice-10 busy loop per CPU. Stopped by `stop`, by the signal handlers in main, and by the
+    kernel (parent-death signal) if this script is killed outright."""
+
+    def __init__(self):
+        self.procs = []
+
+    def start(self):
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+        def die_with_parent():
+            libc.prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+
+        for _ in range(len(os.sched_getaffinity(0))):
+            self.procs.append(subprocess.Popen(
+                ["nice", "-n", "10", "sh", "-c", "while :; do :; done"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, preexec_fn=die_with_parent))
+        time.sleep(2)
+
+    def stop(self):
+        for p in self.procs:
+            if p.poll() is None:
+                p.kill()
+        for p in self.procs:
+            p.wait()
+        self.procs = []
+
+
+def cpu_busy_s():
+    """Busy CPU seconds of the whole machine (/proc/stat is not namespaced in the dev container)."""
+    f = [int(x) for x in Path("/proc/stat").read_text().split("\n")[0].split()[1:]]
+    return (sum(f[:8]) - f[3] - f[4]) / os.sysconf("SC_CLK_TCK")
+
+
+def children_cpu_s():
+    r = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return r.ru_utime + r.ru_stime
+
+
+def run_mode(name, args, items, fillers, load):
+    keys, threads, loaded, marked = MODES[name]
+    cfg_home = args.out / "config" / name
+    write_config(cfg_home, keys, threads, fillers if marked else None)
+    env = {k: v for k, v in os.environ.items() if k not in ("KOEINPUT_LOG_TEXT", "RUST_LOG")}
+    home = args.work / "home"
+    env.update(HOME=str(home), XDG_CONFIG_HOME=str(cfg_home), XDG_DATA_HOME=str(home / ".local/share"),
+               KOEINPUT_DATA_DIR=str(ROOT / "data"))
+    paths = {str(args.work / "eval-data" / it["audio"]): it["id"] for it in items}
+    raw = args.out / "raw"
+    raw.mkdir(exist_ok=True)
+    t0, busy0, own0 = time.monotonic(), cpu_busy_s(), children_cpu_s()
+    if loaded:
+        load.start()
+    proc = None
+    try:
+        with open(raw / f"{name}.stderr", "w") as err:
+            proc = subprocess.Popen([str(args.bin), "transcribe", "--partials", *paths], env=env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
+                                    text=True, encoding="utf-8")
+            rows, cur, last_text = [], None, None
+            for line in proc.stdout:
+                now = time.monotonic()
+                line = line.rstrip("\n")
+                if line in paths:
+                    cur = dict(id=paths[line], start=now, partials=[])
+                    last_text = None
+                    continue
+                if cur is None:
+                    continue
+                if m := STATS.match(line):
+                    cur.update(text=last_text or "", audio_s=float(m[1]), final_s=float(m[2]))
+                    rows.append(cur)
+                    cur = None
+                elif m := PARTIAL.match(line):
+                    cur["partials"].append(dict(t=float(m[1]), wall=now - cur["start"], text=m[2]))
+                else:
+                    last_text = line[2:]
+            _, status, usage = os.wait4(proc.pid, 0)
+            proc.returncode = code = os.waitstatus_to_exitcode(status)
+    finally:
+        if proc and proc.returncode is None:
+            proc.kill()
+            proc.wait()
+        if loaded:
+            load.stop()
+    wall = time.monotonic() - t0
+    other = (cpu_busy_s() - busy0 - (children_cpu_s() - own0)) / wall
+    meta = dict(mode=name, threads=threads, load=loaded, config=keys, exit=code, items=len(rows),
+                other_cpus=other, wall_s=wall, peak_rss_mb=usage.ru_maxrss / 1024,
+                date=datetime.datetime.now().isoformat(timespec="seconds"))
+    with open(raw / f"{name}.jsonl", "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    (raw / f"{name}.meta.json").write_text(json.dumps(meta, indent=1))
+    print(f"{name}: {len(rows)} items, exit {code}, {wall:.0f} s, other processes {other:.1f} CPUs", flush=True)
+
+
+# ---- scoring ----
+
+def load_rows(out, name):
+    p = out / "raw" / f"{name}.jsonl"
+    if not p.exists():
+        return None, None
+    rows = {r["id"]: r for r in map(json.loads, p.read_text(encoding="utf-8").splitlines())}
+    return rows, json.loads((out / "raw" / f"{name}.meta.json").read_text())
+
+
+def score(rows, refs):
+    kind = lambda i: refs[i]["kind"]
+    script = [i for i in rows if kind(i) == "script"]
+    speech = [i for i in rows if kind(i) != "noise"]
+    pairs = [(norm(refs[i]["reference"]), norm(rows[i]["text"])) for i in script]
+    inner = mid = mid_items = 0
+    for i in script:
+        a, b = mid_sentence_periods(refs[i]["reference"], rows[i]["text"])
+        inner, mid, mid_items = inner + a, mid + b, mid_items + (b > 0)
+    finals = [rows[i]["final_s"] for i in speech]
+    intervals = []
+    for i in speech:
+        ps = rows[i]["partials"]
+        for a, b in zip(ps, ps[1:]):
+            if abs(b["t"] - a["t"] - TICK_S) < CHUNK_EPS:
+                intervals.append(max(TICK_S, b["wall"] - a["wall"]))
+    free = [i for i in rows if kind(i) == "free"]
+    return dict(
+        cer=cer_with_ci(pairs), n_script=len(script), n_speech=len(speech),
+        inner=inner, mid=mid, mid_items=mid_items,
+        final_p50=pctl(finals, 50), final_p90=pctl(finals, 90), final_max=max(finals, default=None),
+        interval_p50=pctl(intervals, 50), interval_p90=pctl(intervals, 90), n_intervals=len(intervals),
+        free_inner=sum(inner_periods(rows[i]["text"]) for i in free), n_free=len(free),
+        noise_text=sum(1 for i in rows if kind(i) == "noise" and norm(rows[i]["text"])),
+        n_noise=sum(1 for i in rows if kind(i) == "noise"),
+    )
+
+
+def unmark(text, fillers, keep=None):
+    """The output as the pipeline gives it (marker and one following separator removed), with the
+    marker at position `keep` turned back into its filler."""
+    out, i = [], 0
+    while i < len(text):
+        o = ord(text[i])
+        if MARK_BASE <= o < MARK_BASE + len(fillers):
+            if i == keep:
+                out.append(fillers[o - MARK_BASE])
+                i += 1
+            else:
+                i += 1
+                if i < len(text) and text[i] in "、, ":
+                    i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return remove_japanese_spaces("".join(out))
+
+
+def filler_check(marked, plain, refs, fillers):
+    res = dict(total=0, script=0, hurt=0, helped=0, neutral=0, free=0, free_after_kana=0,
+               mismatch=0, per_filler={f: 0 for f in fillers},
+               refs_containing={f: sum(1 for r in refs.values() if f in r.get("reference", ""))
+                                for f in fillers})
+    for i, r in marked.items():
+        text = r["text"]
+        if plain and i in plain and unmark(text, fillers) != plain[i]["text"]:
+            res["mismatch"] += 1
+        kind = refs[i]["kind"]
+        removed = unmark(text, fillers)
+        for p, c in enumerate(text):
+            o = ord(c)
+            if not MARK_BASE <= o < MARK_BASE + len(fillers):
+                continue
+            res["total"] += 1
+            res["per_filler"][fillers[o - MARK_BASE]] += 1
+            if kind == "script":
+                res["script"] += 1
+                ref = norm(refs[i]["reference"])
+                d_kept = distance(ref, norm(unmark(text, fillers, keep=p)))
+                d_removed = distance(ref, norm(removed))
+                res["hurt" if d_kept < d_removed else "helped" if d_kept > d_removed else "neutral"] += 1
+            elif kind == "free":
+                res["free"] += 1
+                prev = text[p - 1] if p else ""
+                res["free_after_kana"] += bool(prev and "ぁ" <= prev <= "ゟ")
+    return res
+
+
+def f2(v, unit=""):
+    return "n/a" if v is None else f"{v:.2f}{unit}"
+
+
+def rss_gib(meta):
+    mb = meta.get("peak_rss_mb")
+    return f"{mb / 1024:.1f} GiB" if mb else "n/a"
+
+
+def summary(out, refs, fillers):
+    L = ["# M4 measurement (aggregates only)", ""]
+    metas = {}
+    scores = {}
+    for name in MODES:
+        rows, meta = load_rows(out, name)
+        if rows:
+            metas[name], scores[name] = meta, score(rows, refs)
+    any_meta = next(iter(metas.values()), {})
+    L += [f"Items: {sum(1 for r in refs.values() if r['kind'] == 'script')} read-script, "
+          f"{sum(1 for r in refs.values() if r['kind'] == 'free')} free speech, "
+          f"{sum(1 for r in refs.values() if r['kind'] == 'noise')} noise. "
+          f"CPUs: {len(os.sched_getaffinity(0))}. First run finished: {any_meta.get('date', 'n/a')}.", ""]
+    L += ["## Final text (no load)", "",
+          "| Mode | threads | CER (95% CI) | inner 。 | mid-sentence 。 (items) | final p50 | final p90 | final max | free items: inner 。 | noise items with text | peak RSS |",
+          "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name in ("join", "whole", "cohere", "idle-t4", "idle-t16"):
+        if name not in scores:
+            continue
+        s, m = scores[name], metas[name]
+        cer = s["cer"]
+        cer_s = f"{cer[0] * 100:.1f}% ({cer[1] * 100:.0f}–{cer[2] * 100:.0f})" if cer else "n/a"
+        L.append(f"| {name} | {m['threads']} | {cer_s} | {s['inner']} | {s['mid']} ({s['mid_items']}/{s['n_script']}) | "
+                 f"{f2(s['final_p50'], ' s')} | {f2(s['final_p90'], ' s')} | {f2(s['final_max'], ' s')} | "
+                 f"{s['free_inner']} ({s['n_free']} items) | {s['noise_text']}/{s['n_noise']} | "
+                 f"{rss_gib(m)} |")
+    L += ["", "## Threads, with and without load", "",
+          "Load: one busy loop per CPU at nice 10, the recognizer at nice 0.", "",
+          "| Mode | threads | load | final p50 | final p90 | final max | partial interval p50 | partial interval p90 | CER |",
+          "|---|---|---|---|---|---|---|---|---|"]
+    for name in ("idle-t4", "whole", "idle-t16", "load-t4", "load-t8", "load-t16", "cohere", "load-cohere"):
+        if name not in scores:
+            continue
+        s, m = scores[name], metas[name]
+        cer = f"{s['cer'][0] * 100:.1f}%" if s["cer"] else "n/a"
+        L.append(f"| {name} | {m['threads']} | {'yes' if m['load'] else 'no'} | {f2(s['final_p50'], ' s')} | "
+                 f"{f2(s['final_p90'], ' s')} | {f2(s['final_max'], ' s')} | {f2(s['interval_p50'], ' s')} | "
+                 f"{f2(s['interval_p90'], ' s')} | {cer} |")
+    for marked_name, plain_name in (("fillers-whole", "whole"), ("fillers-cohere", "cohere")):
+        marked, _ = load_rows(out, marked_name)
+        if not marked:
+            continue
+        plain, _ = load_rows(out, plain_name)
+        fc = filler_check(marked, plain, refs, fillers)
+        per = ", ".join(f"{k} {v}" for k, v in fc["per_filler"].items() if v) or "none"
+        refs_with = ", ".join(f"{k} {v}" for k, v in fc["refs_containing"].items() if v) or "none"
+        L += ["", f"## Fillers ({marked_name}, compared with {plain_name})", "",
+              f"- Filler matches in the outputs: {fc['total']} ({per}).",
+              f"- Read-script items: {fc['script']} matches; removing the match made the text closer to the reference "
+              f"in {fc['helped']}, further from it in {fc['hurt']}, no change in {fc['neutral']}.",
+              f"- Free-speech items (no reference): {fc['free']} matches, {fc['free_after_kana']} right after a hiragana character.",
+              f"- References that contain a filler string: {refs_with}.",
+              f"- Items whose marked output, unmarked, differs from the plain run: {fc['mismatch']}."]
+    L += ["", "## Runs", "",
+          "Other CPUs: average CPU use of everything except this script's children (the recognizer and the load) "
+          "during the run, on the whole machine.", "",
+          "| Mode | threads | load | items | exit | wall | other CPUs | finished |",
+          "|---|---|---|---|---|---|---|---|"]
+    for name, m in metas.items():
+        L.append(f"| {name} | {m['threads']} | {'yes' if m['load'] else 'no'} | {m['items']} | {m['exit']} | "
+                 f"{m['wall_s']:.0f} s | {m['other_cpus']:.1f} | {m['date']} |")
+    L += ["", "## Method", "",
+          "- CER: read-script items only; NFKC, lowercase, punctuation, symbols and spaces removed (as in the M0 spike); "
+          "corpus CER with a 1000-sample item bootstrap.",
+          "- Inner 。: a `。` with more text after it. Mid-sentence 。: an inner `。` whose aligned position in the "
+          f"reference is more than {BOUNDARY_TOLERANCE} characters from any sentence end of the reference.",
+          "- Final latency: the time `koeinput transcribe` reports after the end of the audio, over read-script and "
+          "free-speech items (noise items left out, as in the spike). The daemon adds the 250 ms tail before it.",
+          "- Partial interval: max(0.5 s, wall time between two consecutive partial results one 0.5 s tick apart); "
+          "transcribe feeds audio faster than real time, so this is the decode cost per tick, as in the spike.",
+          "- Fillers: a run with a dictionary that turns each filler into a marker shows where the filler rule removes text; "
+          "each match is scored against the reference with and without the removal."]
+    text = "\n".join(L) + "\n"
+    (out / "summary.md").write_text(text, encoding="utf-8")
+    return text
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--work", type=Path, default=ROOT / "work")
+    ap.add_argument("--out", type=Path)
+    ap.add_argument("--bin", type=Path, default=ROOT / "target/release/koeinput")
+    ap.add_argument("--modes", default=",".join(MODES))
+    ap.add_argument("--score-only", action="store_true")
+    args = ap.parse_args()
+    args.out = args.out or args.work / "results/m4"
+    args.out.mkdir(parents=True, exist_ok=True)
+    os.chmod(args.out, 0o700)
+    lines = (args.work / "eval-data/references.jsonl").read_text(encoding="utf-8").splitlines()
+    refs = {r["id"]: r for r in (json.loads(l) for l in lines if l.strip())}
+    fillers = fillers_from_source()
+    if not args.score_only:
+        load = Load()
+
+        def on_signal(sig, _frame):
+            load.stop()
+            sys.exit(128 + sig)
+
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, on_signal)
+        items = sorted(refs.values(), key=lambda r: r["id"])
+        try:
+            for name in args.modes.split(","):
+                if name not in MODES:
+                    sys.exit(f"unknown mode {name}; modes: {', '.join(MODES)}")
+                need = NEEDS.get(name)
+                if need and not model_installed(args.work / "home", need):
+                    print(f"{name}: skipped, {need} is not installed in {args.work / 'home'}", flush=True)
+                    continue
+                run_mode(name, args, items, fillers, load)
+        finally:
+            load.stop()
+    print(summary(args.out, refs, fillers))
+
+
+if __name__ == "__main__":
+    main()
