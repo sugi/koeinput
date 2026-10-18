@@ -1,6 +1,6 @@
 use crate::config::{Config, Paths};
 use crate::engine::{Engine, VadFactory};
-use crate::models::{Catalog, VAD_MODEL_ID};
+use crate::models::{Catalog, ModelEntry, VAD_MODEL_ID};
 use crate::postprocess::{PostProcessor, load_dictionary};
 use crate::recognizer::{Recognizer, SherpaOffline};
 use crate::session::SessionConfig;
@@ -41,24 +41,11 @@ fn catalog(paths: &Paths) -> Result<Catalog, BuildError> {
     Catalog::load(&paths.catalog_file).map_err(|e| BuildError::Catalog(e.to_string()))
 }
 
-/// Whether the files of the configured (or default) main model and the VAD model are installed.
-/// A catalog or configuration error counts as not installed; `load_main` reports the cause.
-pub fn main_model_installed(paths: &Paths, cfg: &Config) -> bool {
-    let Ok(catalog) = catalog(paths) else {
-        return false;
-    };
-    let entry = match &cfg.model {
-        Some(id) => catalog.get(id),
-        None => catalog.default_model(),
-    };
-    [entry, catalog.get(VAD_MODEL_ID)]
-        .into_iter()
-        .all(|e| e.is_some_and(|e| e.is_installed(&paths.models_dir)))
-}
-
-/// The engine without the final-stage model.
-pub fn load_main(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildError> {
-    let catalog = catalog(paths)?;
+/// The configured (or default) main model and the VAD model.
+fn main_entries<'a>(
+    catalog: &'a Catalog,
+    cfg: &Config,
+) -> Result<(&'a ModelEntry, &'a ModelEntry), BuildError> {
     let entry = match &cfg.model {
         Some(id) => catalog
             .get(id)
@@ -70,6 +57,24 @@ pub fn load_main(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildE
     let vad_entry = catalog
         .get(VAD_MODEL_ID)
         .ok_or_else(|| BuildError::Catalog("no silero-vad entry".into()))?;
+    Ok((entry, vad_entry))
+}
+
+/// Whether the files of the configured (or default) main model and the VAD model are installed.
+/// A catalog or configuration error counts as not installed; `load_main` reports the cause.
+pub fn main_model_installed(paths: &Paths, cfg: &Config) -> bool {
+    catalog(paths)
+        .and_then(|c| {
+            let (m, v) = main_entries(&c, cfg)?;
+            Ok([m, v].iter().all(|e| e.is_installed(&paths.models_dir)))
+        })
+        .unwrap_or(false)
+}
+
+/// The engine without the final-stage model.
+pub fn load_main(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildError> {
+    let catalog = catalog(paths)?;
+    let (entry, vad_entry) = main_entries(&catalog, cfg)?;
     for e in [entry, vad_entry] {
         if !e.is_installed(&paths.models_dir) {
             return Err(BuildError::NoModel {
@@ -188,6 +193,34 @@ mod tests {
                 "koeinput model install silero-vad".into()
             )
         );
+    }
+
+    #[test]
+    fn main_model_installed_needs_the_main_and_vad_models() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = test_paths(tmp.path());
+        let cfg = Config::default();
+        assert!(!main_model_installed(&paths, &cfg));
+
+        let catalog = Catalog::load(&paths.catalog_file).unwrap();
+        let install = |id: &str| {
+            let e = catalog.get(id).unwrap();
+            let dir = e.dir(&paths.models_dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in e.files.values() {
+                std::fs::write(dir.join(f), b"x").unwrap();
+            }
+        };
+        install(catalog.default_model().unwrap().id.as_str());
+        assert!(!main_model_installed(&paths, &cfg));
+        install(VAD_MODEL_ID);
+        assert!(main_model_installed(&paths, &cfg));
+
+        let unknown = Config {
+            model: Some("no-such-model".into()),
+            ..Config::default()
+        };
+        assert!(!main_model_installed(&paths, &unknown));
     }
 
     fn test_paths(dir: &Path) -> Paths {

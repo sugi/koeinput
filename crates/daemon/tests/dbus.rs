@@ -615,7 +615,7 @@ async fn start_error(p: &Recognizer1Proxy<'_>) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn model_installed_after_start_loads_at_the_next_start() {
     let marker = installed_marker();
-    let (_d, conn) = start_daemon(&[
+    let (d, conn) = start_daemon(&[
         ("KOEINPUT_TEST_NO_MODEL", "1"),
         ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
     ])
@@ -626,6 +626,7 @@ async fn model_installed_after_start_loads_at_the_next_start() {
     assert!(!p.ready().await.unwrap());
     // A Start while the model is still missing must not start a load.
     assert!(start_error(&p).await.contains("koeinput model install"));
+    assert_eq!(log_count(&d, "the model is installed now"), 0);
 
     let mut ready = p.receive_ready_changed().await;
     open_gate(&marker);
@@ -679,7 +680,7 @@ async fn concurrent_starts_share_one_reload() {
         }
     }
     assert_eq!(ok, 1);
-    assert_eq!(log_count(&d, "model loaded"), 1);
+    assert_eq!(log_count(&d, "model loaded model=fake"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
