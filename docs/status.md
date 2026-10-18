@@ -17,6 +17,9 @@ Decisions themselves live in [decisions.md](decisions.md).
 | [superpowers/specs/2026-10-18-m2-addon-design.md](superpowers/specs/2026-10-18-m2-addon-design.md) | M2 spec (fcitx5 addon) |
 | [superpowers/specs/2026-10-18-m3-debian-packaging-design.md](superpowers/specs/2026-10-18-m3-debian-packaging-design.md) | M3 spec (Debian packaging) |
 | [superpowers/specs/2026-10-18-m4-quality-design.md](superpowers/specs/2026-10-18-m4-quality-design.md) | M4 spec (quality) |
+| [superpowers/specs/2026-10-18-m5-release-design.md](superpowers/specs/2026-10-18-m5-release-design.md) | M5 spec (more formats, CI, release) |
+| [release.md](release.md) | How to cut a release |
+| [models.md](models.md) | Origin and license of every catalog model |
 | [spike-results.md](spike-results.md) | Model comparison on the user's own recordings (M0) |
 | [m4-results.md](m4-results.md) | Measurement of the M4 changes and of latency under CPU load |
 | [development.md](development.md) | How to build, test, package and run, and how to install on the host |
@@ -31,7 +34,7 @@ Decisions themselves live in [decisions.md](decisions.md).
 | M2. Minimal fcitx5 addon | Merged into `main` (merge commit `fe20500`). Tests pass in the Debian 13 and Debian 12 images. The host check is pending; it uses the M3 packages. |
 | M3. Debian packaging | Merged into `main` (merge commit `68abc8e`). The packages build, pass lintian and pass the install test for Debian 13 and Debian testing. The host install and the host check are pending for the user, see below. |
 | M4. Quality | Merged into `main` (merge commit `4f55bc4`). The defaults are measured on the user's recordings. See below. |
-| M5. RPM, PKGBUILD, CI, release | In progress on branches `m5-docs`, `m5-ubuntu`, `m5-rpm` and `m5-arch`. |
+| M5. RPM, PKGBUILD, CI, release | Merged into `main`. Packages for six targets build and pass the install test; CI runs on GitHub. No release has been made. See below. |
 
 ### Left over from M1
 
@@ -45,13 +48,19 @@ Decisions themselves live in [decisions.md](decisions.md).
   - `transcribe` on the user's recordings produced text, with the final result ready at the end of the audio;
   - `listen` works against the test-hooks fake daemon.
 
-### Next for the user: host install and host check
+### Next for the user
 
-The packages are ready; installing them needs root on the host, so the user does it.
+1. Host install and host check: build `scripts/build-deb testing` and `scripts/test-deb testing` in the dev container, or download the `packages-testing` artifact of a `release.yml` run. Install on the host, install the model and restart fcitx5 as in [development.md](development.md#install-on-the-host). If the M3 packages are installed, use `apt install --reinstall` (same version). Then go through the [host check](development.md#host-check) in WezTerm, Chrome, Firefox, Emacs and Discord.
+2. The microphone check left over from M1 (below).
+3. Decide when to make the repository public and when to tag the first release ([release.md](release.md)).
 
-1. Build and test: `scripts/build-deb testing` and `scripts/test-deb testing` in the dev container.
-2. Install on the host, install the model, restart fcitx5: the steps, rollback and logs are in [development.md](development.md#install-on-the-host).
-3. Go through the [host check](development.md#host-check) in WezTerm, Chrome, Firefox, Emacs and Discord. The notes feed M4.
+## M5: More formats, CI and release
+
+Spec: [M5 spec](superpowers/specs/2026-10-18-m5-release-design.md).
+
+- Packages for Debian 13, Debian testing, Ubuntu 24.04, Ubuntu 26.04 (`.deb`), Fedora 44 (`.rpm`) and Arch Linux, all built offline from the same three orig tarballs. Each format runs `scripts/check-no-gpl` on the files that go into the package, ships `debian/copyright`, the license texts and `models.md`, and passes the same install test in a fresh container (`scripts/lib/install-checks.sh`). See [development.md](development.md#packages).
+- `README.md` and `README.ja.md` for users; [models.md](models.md) with the CC-BY-4.0 attribution of the default model; [release.md](release.md) with the release steps.
+- The private GitHub repository `sugi/koeinput`. `ci.yml` runs on every push and pull request; `release.yml` builds and tests all six targets on a `v*` tag or by hand, and makes a draft release only on a tag. No tag has been pushed.
 
 ## M4: Quality
 
