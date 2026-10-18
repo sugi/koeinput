@@ -61,6 +61,7 @@ fi
 sum=$(sha256sum "target/deb/$base.orig-sherpaonnx.tar.bz2" | cut -d' ' -f1)
 [ "$sum" = "$SHERPA_ONNX_SHA256" ] ||
   die "target/deb/$base.orig-sherpaonnx.tar.bz2 has SHA-256 $sum, not the pinned $SHERPA_ONNX_SHA256"
+scripts/check-vendor-copyright "target/deb/$base.orig-vendor.tar.xz"
 
 containerfile=packaging/containers/rpm-$dist.Containerfile
 image="localhost/koeinput-rpm-$dist:$(sha256sum "$containerfile" | cut -c1-12)"

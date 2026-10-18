@@ -65,14 +65,7 @@ fi
 sum=$(sha256sum "target/deb/$base.orig-sherpaonnx.tar.bz2" | cut -d' ' -f1)
 [ "$sum" = "$SHERPA_ONNX_SHA256" ] ||
   die "target/deb/$base.orig-sherpaonnx.tar.bz2 has SHA-256 $sum, not the pinned $SHERPA_ONNX_SHA256"
-
-# Every vendored crate directory needs its own paragraph in debian/copyright.
-tar -tJf "target/deb/$base.orig-vendor.tar.xz" | sed -n 's|^vendor/\([^/]*\)/.*|\1|p' | sort -u >"$tmp/vendored"
-sed -n 's|^Files: vendor/\([^/]*\)/\*$|\1|p' debian/copyright | sort >"$tmp/listed"
-if ! cmp -s "$tmp/vendored" "$tmp/listed"; then
-  diff "$tmp/vendored" "$tmp/listed" >&2 || true
-  die "the crates in the vendor tarball (<) and the Files: vendor/ paragraphs of debian/copyright (>) differ"
-fi
+scripts/check-vendor-copyright "target/deb/$base.orig-vendor.tar.xz"
 
 containerfile=packaging/containers/deb-$dist.Containerfile
 image="localhost/koeinput-deb-$dist:$(sha256sum "$containerfile" | cut -c1-12)"
