@@ -24,13 +24,14 @@ The repository is private for now, so the release is private too.
    ```sh
    nice -n 10 scripts/make-orig
    nice -n 10 scripts/build-deb trixie && scripts/test-deb trixie
-   nice -n 10 scripts/build-rpm && scripts/test-rpm
+   nice -n 10 scripts/build-rpm fedora44 && scripts/test-rpm fedora44
    nice -n 10 scripts/build-arch && scripts/test-arch
    ```
 
    The other Debian and Ubuntu targets use the same scripts with `testing`, `noble` or `resolute` (Ubuntu 26.04).
-   Builds run without network from the orig tarballs. They run `scripts/check-no-gpl` before stripping.
-   Debian builds also produce `-dbgsym` packages; they hold debug symbols, and the install needs only the two packages per target.
+   Builds run without network from the orig tarballs. Each build runs `scripts/check-no-gpl` on the files that go into the package, before they are stripped.
+   Each build also makes debug packages: `-dbgsym` on Debian, `.ddeb` on Ubuntu, `-debuginfo` and `-debugsource` on Fedora, and `-debug` on Arch. They are for local debugging; a release uploads only the two user packages per target.
+   [Packages](development.md#packages) in the development notes describes the scripts and their checks.
 
 ## Tag
 
@@ -49,12 +50,13 @@ The tag must match the version in `Cargo.toml`.
 
 1. `scripts/make-orig` makes the source tarballs.
 2. A matrix over the six targets builds the packages and runs the install test in a fresh container of each distribution.
-3. On a tag only, it creates a draft release with all packages and a `SHA256SUMS` file.
+3. On a tag only, it creates a draft release with the two user packages of each target (no debug packages), the three orig tarballs and a `SHA256SUMS` file.
+   The orig tarballs keep their names (`koeinput_X.Y.Z.orig.tar.xz`, `koeinput_X.Y.Z.orig-vendor.tar.xz`, `koeinput_X.Y.Z.orig-sherpaonnx.tar.bz2`), because `Source0` to `Source2` in the RPM spec are the download URLs of these release files.
    A manual dispatch uploads the packages as workflow artifacts only.
 
 ## After the build
 
-1. Open the draft release on GitHub and check the package list: two packages per target.
+1. Open the draft release on GitHub and check the file list: two packages per target, no debug packages, and the three orig tarballs.
 2. Download `SHA256SUMS` and the packages and run `sha256sum -c SHA256SUMS`.
 3. Install one package set on a real machine and dictate once.
 4. Write the release notes, then publish the draft.

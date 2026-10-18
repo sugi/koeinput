@@ -213,14 +213,108 @@ For each app, note whether hold mode works and how the partial text looks. These
 
 Once, in any app: log out and in again, wait about 10 seconds, then dictate. The first dictation works without a "model not ready" notice, because the addon started the daemon when fcitx5 loaded it.
 
-## Debian packages
+## Packages
 
-One source package, `koeinput`, builds two binary packages:
+Every format has the same two packages:
 
 - `koeinput`: the daemon, the `koeinput` command, the systemd user unit, the D-Bus service file, the model catalog and the man page;
 - `fcitx5-koeinput`: the addon.
 
-They are built for Debian 13 (trixie), Debian testing, Ubuntu 24.04 (noble) and Ubuntu 26.04 (resolute), for amd64 only, all from the same `debian/` directory. Everything runs in podman containers.
+They are built for amd64 only. Everything runs in podman containers. Each format has a build script and a test script:
+
+| Target | Build and test | Output |
+|---|---|---|
+| Debian 13, Debian testing, Ubuntu 24.04, Ubuntu 26.04 | `scripts/build-deb <dist>`, `scripts/test-deb <dist>` with `trixie`, `testing`, `noble` or `resolute` | `target/deb/<dist>/` |
+| Fedora 44 | `scripts/build-rpm fedora44`, `scripts/test-rpm fedora44` | `target/rpm/fedora44/` |
+| Arch Linux | `scripts/build-arch`, `scripts/test-arch` | `target/arch/` |
+
+This section describes what the formats share. The sections after it describe what is particular to each format.
+
+### Orig tarballs
+
+All formats build from the three orig tarballs of the Debian source package, under the same names. `scripts/make-orig` makes them in `target/deb/` from a clean work tree:
+
+- `koeinput_0.1.0.orig.tar.xz`: `git archive` of HEAD, without `debian/`;
+- `koeinput_0.1.0.orig-vendor.tar.xz`: the crates of `Cargo.lock`, from `cargo vendor-filterer` (crates that x86_64 Linux does not build become empty stubs);
+- `koeinput_0.1.0.orig-sherpaonnx.tar.bz2`: the pinned sherpa-onnx archive, byte for byte.
+
+make-orig keeps an existing tarball with the same content and stops at one with different content. Every build script runs it when a tarball is missing or older than HEAD.
+The files in the main tarball come from HEAD, so commit them before you build. Each format section says which packaging files come from the work tree instead.
+
+### The main tarball changes with every commit
+
+`git archive` records the commit, so every commit changes `koeinput_0.1.0.orig.tar.xz`. The build script then runs make-orig, and make-orig stops because the tarball differs. While a version is unpublished (0.1.0 now), delete its tarballs and build again:
+
+```sh
+rm target/deb/koeinput_0.1.0.orig*
+scripts/build-deb testing
+```
+
+make-orig needs a clean work tree, so commit or set aside the packaging changes first.
+Once a version is released, keep its tarballs. Any later build then needs a new upstream version, even for a change in `debian/` alone, which normally only raises the Debian revision (see [followups.md](followups.md)).
+
+### Checks in every build
+
+Before the build container starts, each build script:
+
+- runs `scripts/gen-copyright --check`. All formats ship `debian/copyright` as the copyright file of `koeinput`;
+- runs `scripts/check-vendor-copyright` on the vendor tarball. It fails when a vendored crate has no `Files: vendor/<crate>/*` paragraph in `debian/copyright`, or when a paragraph names a crate that is not in the tarball;
+- checks the sherpa-onnx tarball against the SHA-256 in `packaging/sherpa-onnx.env`.
+
+The package build then runs without network. It:
+
+- runs `cargo test` and the addon's `controller` test. `cargo test` uses its own target directory, so it cannot rebuild the binaries that go into the package;
+- runs `scripts/check-no-gpl` on the files that go into the package, before they are stripped:
+  - Debian and Ubuntu: on the built binaries, and again on the installed files in `debian/koeinput/` just before `dh_strip`;
+  - Fedora: on the built binaries in `%build`. `%install` copies them unchanged, and rpmbuild strips them after `%install`;
+  - Arch: on the built binaries, and again at the end of `package_koeinput()` on the installed files, before makepkg strips them.
+
+  The installed binaries are stripped, so the install tests cannot run this check.
+
+### Debug packages
+
+Each format also builds packages with debug symbols:
+
+- Debian: `koeinput-dbgsym` and `fcitx5-koeinput-dbgsym` (`.deb`);
+- Ubuntu: the same packages, named `*.ddeb`;
+- Fedora: `koeinput-debuginfo`, `fcitx5-koeinput-debuginfo` and `koeinput-debugsource`;
+- Arch: `koeinput-debug`.
+
+They are for local debugging. A release uploads only the two user packages per target.
+
+### Documentation in the packages
+
+`koeinput` installs `README.md` and `README.ja.md` in `/usr/share/doc/koeinput/`. Debian and Ubuntu compress them, as all files over 4 kB there: `README.md.gz` and `README.ja.md.gz`. On Fedora, `fcitx5-koeinput` also has `README.md` in `/usr/share/doc/fcitx5-koeinput/`, because rpmlint warns about a package without documentation.
+
+### Install tests
+
+`scripts/lib/install-checks.sh` is the install test of all formats. Each test script runs it in a fresh container of the distribution. The package manager downloads the dependencies, so the test scripts need the network. The test checks:
+
+- the installed files, and which package installs each one. The D-Bus service file and the user unit start the daemon at its installed path, the user unit is not enabled, the copyright file has the paragraphs of the vendored crates, and the ONNX Runtime notices are installed;
+- `koeinput --version`, `koeinput model list` and `man koeinput`, as an ordinary user;
+- `koeinput status` under `dbus-run-session`: the bus starts the daemon through the D-Bus service file. With no model installed, the daemon reports `ready: no` and logs the install hint;
+- fcitx5 without a display (`fcitx5 --disable=all --enable=keyboard,dbus,koeinput`): it loads the addon, and the addon starts the daemon;
+- the removal removes the files, and a second install works.
+
+Each test script writes a short format file for `scripts/lib/install-checks.sh` with what differs between the formats: the package files, the paths (the daemon, the addon directory, the documentation and license files), the package manager commands, and the checks that only that format has. The comment at the top of `scripts/lib/install-checks.sh` lists the names. To add a check for all formats, add it to `scripts/lib/install-checks.sh`.
+
+A failed check prints `FAIL:` and stops the test, and the test script exits with status 1. If fcitx5 cannot run without a display, the test prints a warning and still runs the other checks. `podman run --init` does not work here (no catatonit), so the test runs its own PID 1, which passes signals on and stops a test that hangs. The output also goes to `test.log` in the output directory.
+
+### Crates and debian/copyright
+
+`scripts/gen-copyright` writes `debian/copyright`. With `--check` it only compares and fails when the file is out of date.
+
+It takes the license of each vendored crate from `cargo metadata`, and the copyright lines from the crate's license files. Its tables add what those files miss:
+
+- `EXTRA_HOLDERS`: copyright holders that a crate's license files leave out;
+- `BUNDLED`: files inside a crate under another license, such as bundled C code or tests taken from other projects;
+- `LICENSE_TEXTS`: where each license text comes from.
+
+After a change of `Cargo.lock`, run `scripts/gen-copyright` and read the diff of `debian/copyright`. The build scripts fail when a vendored crate has no paragraph (`scripts/check-vendor-copyright`). A change of `Cargo.lock` also changes the vendor tarball, so after a release it needs a new upstream version.
+
+## Debian packages
+
+`debian/` builds the packages for Debian 13 (trixie), Debian testing, Ubuntu 24.04 (noble) and Ubuntu 26.04 (resolute), all from the same directory. See [Packages](#packages) for what all formats share.
 
 ```sh
 scripts/build-deb testing      # or trixie, noble, resolute
@@ -229,16 +323,9 @@ scripts/test-deb testing
 
 Build the packages for each release on its own: they depend on the library versions of the release they were built on (for example fcitx5 5.1.19 or newer for a 26.04 build).
 
-- `scripts/make-orig` makes the three orig tarballs in `target/deb/` from a clean work tree:
-  - `koeinput_0.1.0.orig.tar.xz`: `git archive` of HEAD, without `debian/`;
-  - `koeinput_0.1.0.orig-vendor.tar.xz`: the crates of `Cargo.lock`, from `cargo vendor-filterer` (crates that x86_64 Linux does not build become empty stubs);
-  - `koeinput_0.1.0.orig-sherpaonnx.tar.bz2`: the pinned sherpa-onnx archive, byte for byte.
-
-  It keeps an existing tarball with the same content and stops at one with different content.
 - `scripts/build-deb trixie|testing|noble|resolute` builds the source and binary packages without network in the image from `packaging/containers/deb-<dist>.Containerfile`, then runs lintian. The packages, the source package, `build.log` and `lintian.txt` go to `target/deb/<dist>/`.
-  - It runs `scripts/gen-copyright --check` first, and `scripts/make-orig` when a tarball is missing or out of date.
+  - It runs the [checks in every build](#checks-in-every-build).
   - Files outside `debian/` come from HEAD through the orig tarball, so commit them first. `debian/` comes from the work tree, so you can try packaging changes before you commit them.
-  - The package build runs `cargo test`, the addon's `controller` test and `scripts/check-no-gpl`. The GPL check runs twice: on the binaries right after the build, and on the installed files in `debian/koeinput/` just before `dh_strip` strips them. `cargo test` uses its own target directory, `target-test/`, so it cannot rebuild the binaries that ship.
   - Rust comes from the distribution. The workspace needs 1.89:
     - Debian 13 has rustc 1.85, so the trixie image takes Rust from trixie-backports;
     - Ubuntu 24.04 has rustc 1.75, so the noble image installs `rustc-1.91` and `cargo-1.91` (noble-updates). They install to `/usr/lib/rust-1.91/bin`, which `debian/rules` puts first in `PATH` when it exists. `debian/control` accepts either `rustc (>= 1.89)` or `rustc-1.91` (and the same for cargo);
@@ -248,29 +335,9 @@ Build the packages for each release on its own: they depend on the library versi
   - The Ubuntu builds get their own version: in the container, before the package build, the script adds a local entry to `debian/changelog` with `dch --local ~<dist> --distribution <dist>`. The packages are then `0.1.0-1~noble1` and `0.1.0-1~resolute1`. The entry is dated one second after the committed top entry, so the build date does not depend on when it runs, and the entry is newer than the one below it, as lintian wants. The committed `debian/changelog` does not change, and the Debian builds keep `0.1.0-1`.
 
     The Ubuntu builds print `dpkg-genchanges: warning: the current version (0.1.0-1~<dist>1) is earlier than the previous one (0.1.0-1)`. This is expected: the local `~<dist>1` entry sits above `-1` on purpose, and `~` sorts before the end of the version.
-  - Ubuntu names the debug symbol packages `*-dbgsym_*.ddeb` instead of `*-dbgsym_*.deb`. They go to `target/deb/<dist>/` too.
+  - The [debug packages](#debug-packages) go to `target/deb/<dist>/` too.
   - lintian must report no errors and no warnings. Ubuntu 24.04 has an older lintian (2.117), which reports other spelling errors in the binaries than the newer versions that `debian/koeinput.lintian-overrides` was written for. So the noble build skips the `spelling-error-in-binary` check; the comment in `scripts/build-deb` gives the details. The 26.04 lintian output shows the experimental tag `X: spelling-error-in-binary wtH`: the word is bytes of machine code. It has no override, because the override would be unused on Debian, and it does not fail the build.
-- `scripts/test-deb trixie|testing|noble|resolute` installs the two packages in a fresh container: `debian:<dist>`, `ubuntu:24.04` or `ubuntu:26.04`. apt downloads the dependencies, so it needs the network. The Ubuntu container images leave out man pages, translations and most documentation, and replace `man` with a stub. The script undoes this first, so the files are installed as on a normal Ubuntu system. It checks:
-  - the installed files, and which package installs each one;
-  - `koeinput --version`, `koeinput model list` and `man koeinput`;
-  - `koeinput status` under `dbus-run-session`: the bus starts the daemon through the D-Bus service file. With no model installed, the daemon reports `ready: no` and logs the install hint;
-  - fcitx5 without a display (`fcitx5 --disable=all --enable=keyboard,dbus,koeinput`): it loads the addon, and the addon starts the daemon;
-  - `apt-get remove` removes the files, and a second install works.
-
-  The output is also saved in `target/deb/<dist>/test.log`. If fcitx5 cannot run without a display, the script prints a warning and still passes the other checks. The installed binaries are stripped, so the GPL symbol check runs in the package build instead.
-- `scripts/gen-copyright` writes `debian/copyright`. With `--check` it only compares and fails when the file is out of date.
-
-### The main tarball changes with every commit
-
-`git archive` records the commit, so every commit changes `koeinput_0.1.0.orig.tar.xz`. build-deb then runs make-orig, and make-orig stops because the tarball differs. While a version is unpublished (0.1.0 now), delete its tarballs and build again:
-
-```sh
-rm target/deb/koeinput_0.1.0.orig*
-scripts/build-deb testing
-```
-
-make-orig needs a clean work tree, so commit or set aside changes in `debian/` first.
-Once a version is released, keep its tarballs. Any later build then needs a new upstream version, even for a change in `debian/` alone, which normally only raises the Debian revision (see [followups.md](followups.md)).
+- `scripts/test-deb trixie|testing|noble|resolute` runs the [install tests](#install-tests) in a fresh container: `debian:<dist>`, `ubuntu:24.04` or `ubuntu:26.04`. The Ubuntu container images leave out man pages, translations and most documentation, and replace `man` with a stub. The script undoes this first, so the files are installed as on a normal Ubuntu system. The output is also saved in `target/deb/<dist>/test.log`.
 
 ### New version
 
@@ -289,48 +356,38 @@ After the steps in [sherpa-onnx libraries](#sherpa-onnx-libraries), the package 
 4. Build with a new upstream version, because the sherpa-onnx tarball changes.
 5. Check `debian/koeinput.lintian-overrides`. It lists spelling errors inside the prebuilt libraries; lintian reports overrides that are no longer used.
 
-### Crates and debian/copyright
-
-`scripts/gen-copyright` takes the license of each vendored crate from `cargo metadata`, and the copyright lines from the crate's license files. Its tables add what those files miss:
-
-- `EXTRA_HOLDERS`: copyright holders that a crate's license files leave out;
-- `BUNDLED`: files inside a crate under another license, such as bundled C code or tests taken from other projects;
-- `LICENSE_TEXTS`: where each license text comes from.
-
-After a change of `Cargo.lock`, run `scripts/gen-copyright` and read the diff of `debian/copyright`. build-deb fails when a vendored crate has no paragraph. A change of `Cargo.lock` also changes the vendor tarball, so after a release it needs a new upstream version.
-
 ## RPM
 
-`packaging/rpm/koeinput.spec` builds the same two packages, `koeinput` and `fcitx5-koeinput`, for Fedora 44 on amd64. Everything runs in podman containers.
+`packaging/rpm/koeinput.spec` builds the same two packages, `koeinput` and `fcitx5-koeinput`, for Fedora 44 on amd64. See [Packages](#packages) for what all formats share.
 
 ```sh
 scripts/build-rpm fedora44
 scripts/test-rpm fedora44
 ```
 
-- `Source0` to `Source2` are the three orig tarballs of the Debian package, written as release URLs (`%{url}/releases/download/v%{version}/koeinput_0.1.0.orig.tar.xz` and so on). rpmbuild uses only the file names, so build-rpm links the files from `target/deb/`. A release must upload the three orig tarballs under these names.
+- `Source0` to `Source2` are the three orig tarballs, written as release URLs (`%{url}/releases/download/v%{version}/koeinput_0.1.0.orig.tar.xz` and so on). rpmbuild uses only the file names, so build-rpm links the files from `target/deb/`. A release must upload the three orig tarballs under these names.
 - `Source3`, `koeinput-copyright`, is a copy of `debian/copyright`; the package installs it as `/usr/share/licenses/koeinput/copyright`.
 - `%prep` checks the sherpa-onnx tarball against the SHA-256 in `packaging/sherpa-onnx.env` from the main tarball. It also checks the macros `sherpa_onnx_version` (against the archive name in that file) and `onnxruntime_version` (against the ONNX Runtime license file in `packaging/licenses/`), which give the `bundled(...)` versions.
-- `scripts/build-rpm fedora44` runs `rpmbuild -ba` without network in the image from `packaging/containers/rpm-fedora44.Containerfile`, then rpmlint on the spec and all packages. It fails on rpmlint errors; warnings are only listed. The packages (with the `-debuginfo` and `-debugsource` packages that rpmbuild adds), the source RPM, `build.log` and `rpmlint.txt` go to `target/rpm/fedora44/`.
-  - Like build-deb, it runs `scripts/gen-copyright --check` first, and `scripts/make-orig` when a tarball is missing or out of date. The spec and `debian/copyright` come from the work tree; everything else comes from HEAD through the main tarball, so commit it first. After a commit, delete the tarballs of an unpublished version as for build-deb (see [The main tarball changes with every commit](#the-main-tarball-changes-with-every-commit)).
-  - The build uses Fedora's compiler and Rust flags, plus `--remap-path-prefix`, so the build directory does not end up in the binaries. It runs `cargo test`, the addon's `controller` test and `scripts/check-no-gpl` (before rpmbuild strips the binaries).
-- `scripts/test-rpm fedora44` installs the packages with dnf in a fresh `fedora:44` container. dnf downloads the dependencies, so it needs the network. It runs the checks of test-deb, and also `rpm -V` and a check that the packages have no install scripts (the user unit is never enabled). The Fedora image installs no documentation (`tsflags=nodocs`, which leaves out man pages too) and no translations other than en_US (`/etc/rpm/macros.image-language-conf`), so the test turns both off first, as on a desktop. The output is also saved in `target/rpm/fedora44/test.log`.
+- `scripts/build-rpm fedora44` runs `rpmbuild -ba` without network in the image from `packaging/containers/rpm-fedora44.Containerfile`, then rpmlint on the spec and all packages. It fails on rpmlint errors; warnings are only listed. The packages (with the [debug packages](#debug-packages)), the source RPM, `build.log` and `rpmlint.txt` go to `target/rpm/fedora44/`.
+  - It runs the [checks in every build](#checks-in-every-build). The spec and `debian/copyright` come from the work tree; everything else comes from HEAD through the main tarball, so commit it first.
+  - The build uses Fedora's compiler and Rust flags, plus `--remap-path-prefix`, so the build directory does not end up in the binaries.
+- `scripts/test-rpm fedora44` runs the [install tests](#install-tests) with dnf in a fresh `fedora:44` container. It also runs `rpm -V` and checks that the packages have no install scripts (the user unit is never enabled). The Fedora image installs no documentation (`tsflags=nodocs`, which leaves out man pages too) and no translations other than en_US (`/etc/rpm/macros.image-language-conf`), so the test turns both off first, as on a desktop. The output is also saved in `target/rpm/fedora44/test.log`.
 - The license files go to `/usr/share/licenses/koeinput/`: `LICENSE-MIT`, `LICENSE-APACHE`, `copyright` (a copy of `debian/copyright`, with the notices of all the code linked into the binaries) and the files of `packaging/licenses/`. `fcitx5-koeinput` has the two project licenses.
 - The `License` tag of `koeinput` is the macro `koeinput_license` at the top of the spec: the licenses of the crates the binaries link and of the sherpa-onnx libraries. At the start of `%build`, the build compares it with `cargo tree` and fails when a linked crate has a license that the tag does not list (add the license to the macro then), when a linked crate has no license expression, or when cargo tree fails or lists nothing.
 - For a new version, change `Version:` and add a `%changelog` entry; keep `Release: 1%{?dist}`. build-rpm stops when `Version:` differs from the upstream version in `debian/changelog`, because the orig tarballs are named after it. For a new sherpa-onnx pin, update `sherpa_onnx_version`, `onnxruntime_version` and the sherpa-onnx part of `koeinput_license`; `%prep` stops while the two versions do not match the pin.
 
 ## Arch Linux packages
 
-`packaging/arch/PKGBUILD` is a split package. It builds `koeinput` and `fcitx5-koeinput` with the same contents as the Debian packages, and makepkg adds `koeinput-debug` with the debug symbols and sources. `koeinput-debug` is for local debugging only; a release uploads only the two user packages.
+`packaging/arch/PKGBUILD` is a split package. It builds `koeinput` and `fcitx5-koeinput` with the same contents as the Debian packages, and makepkg adds `koeinput-debug` (see [Debug packages](#debug-packages)). See [Packages](#packages) for what all formats share.
 
 ```sh
 scripts/build-arch
 scripts/test-arch
 ```
 
-- The sources are the three orig tarballs of the Debian package, under the same names. `scripts/build-arch` runs `scripts/make-orig` when they are missing or older than HEAD, with the same rules as build-deb (see [The main tarball changes with every commit](#the-main-tarball-changes-with-every-commit)).
+- The sources are the three [orig tarballs](#orig-tarballs) and `debian/copyright`.
 - The committed PKGBUILD pins the SHA-256 of the sherpa-onnx archive (the value in `packaging/sherpa-onnx.env`). The main and vendor tarballs and `copyright` have `SKIP`: the main tarball contains the PKGBUILD itself, and all three change with commits and `Cargo.lock`.
-- `scripts/build-arch` builds in the image from `packaging/containers/arch.Containerfile` (`archlinux:latest` with the build tools and a build user, because makepkg refuses to run as root). In a container without network, it:
+- `scripts/build-arch` runs the [checks in every build](#checks-in-every-build), then builds in the image from `packaging/containers/arch.Containerfile` (`archlinux:latest` with the build tools and a build user, because makepkg refuses to run as root). In a container without network, it:
   1. copies the PKGBUILD from the work tree, the three tarballs and `debian/copyright` to the build user;
   2. checks that the PKGBUILD's sherpa-onnx source and sum are the ones in `packaging/sherpa-onnx.env`;
   3. fills in the real sums on that copy with `updpkgsums`;
@@ -339,15 +396,14 @@ scripts/test-arch
 
   The packages, the PKGBUILD with the real sums, `build.log` and `namcap.txt` go to `target/arch/`. The script fails on namcap errors and warnings, except for the ones listed and explained in it.
 - Files outside `packaging/arch/` come from HEAD through the main tarball, so commit them first. The PKGBUILD comes from the work tree.
-- The package build runs `cargo test`, the addon's `controller` test and `scripts/check-no-gpl`, as the Debian build does. The tests use their own target directory, so they cannot change the binaries that go into the package. `scripts/check-no-gpl` runs on the built binaries and again at the end of `package_koeinput()` on the installed copies, before makepkg strips them.
 - The PKGBUILD turns off makepkg's LTO. With LTO, the C code in the crates becomes GCC LTO bytecode, which Rust's linker (lld) cannot read.
 - Arch is a rolling release, but the image is built only once for each version of the Containerfile. To build with current packages, remove the image: `podman rmi $(podman images -q localhost/koeinput-arch)`.
 - The addon goes to `/usr/lib/fcitx5/`. The license texts go to `/usr/share/licenses/koeinput/` and `/usr/share/licenses/fcitx5-koeinput/`. The `koeinput` directory also has:
-  - `copyright`: `debian/copyright`, with the copyright notices and licenses of the vendored crates and the sherpa-onnx archive. build-arch runs `scripts/gen-copyright --check` first, as build-deb does. The file is written for Debian: for some licenses it points to `/usr/share/common-licenses/`, which Arch does not have; Arch has these texts in `/usr/share/licenses/spdx/`;
+  - `copyright`: `debian/copyright`, with the copyright notices and licenses of the vendored crates and the sherpa-onnx archive. The file is written for Debian: for some licenses it points to `/usr/share/common-licenses/`, which Arch does not have; Arch has these texts in `/usr/share/licenses/spdx/`;
   - `sherpa-onnx/`: the license texts of the sherpa-onnx archive;
   - `crates/`: the license files of the crates in the binaries.
 - Arch has no `/usr/libexec`, so the daemon goes to `/usr/lib/koeinput/koeinput-daemon`. The PKGBUILD changes the path in the installed copies of the D-Bus service file and the user unit; the files in `data/` keep `/usr/libexec/koeinput/` for the other distributions.
-- `scripts/test-arch` installs the two packages with `pacman -U` in a fresh `archlinux:latest` container and runs the same checks as test-deb, with `pacman -R` for the removal. pacman downloads the dependencies, so it needs the network. The image leaves out man pages and translations (`NoExtract` in `/etc/pacman.conf`), so the test removes those lines before it installs the packages. The output is also saved in `target/arch/test.log`.
+- `scripts/test-arch` runs the [install tests](#install-tests) with `pacman -U` in a fresh `archlinux:latest` container, with `pacman -R` for the removal. It also checks the versions that `pacman -Q` shows, that nothing is in `/usr/libexec/`, and that the license files of the crates are installed. The image leaves out man pages and translations (`NoExtract` in `/etc/pacman.conf`), so the test removes those lines before it installs the packages. The output is also saved in `target/arch/test.log`.
   The pacman hooks print messages that are expected in a container: "Skipped: Current root is not booted.", "Failed to connect to audit log, ignoring", and the `journal-nocow.conf` line "Failed to resolve specifier: uninitialized /etc/ detected, skipping."
 
 To install on an Arch Linux machine:
