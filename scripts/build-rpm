@@ -1,0 +1,106 @@
+#!/bin/sh
+# Builds the RPM packages for Fedora and checks them with rpmlint.
+# The build runs in a podman container without network, from the orig tarballs in
+# target/deb/ (made by scripts/make-orig when missing), packaging/rpm/koeinput.spec
+# and debian/copyright of the work tree. The binary and source RPMs, the build log
+# and the rpmlint output go to target/rpm/<dist>/.
+# Usage: scripts/build-rpm fedora44
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+die() {
+  echo "scripts/build-rpm: $*" >&2
+  exit 1
+}
+case "${1:-}" in
+  fedora44) dist=$1 ;;
+  *)
+    echo "usage: scripts/build-rpm fedora44" >&2
+    exit 2 ;;
+esac
+
+spec=packaging/rpm/koeinput.spec
+# Files outside the spec and debian/ come from the orig tarball, which is HEAD;
+# uncommitted changes there would silently be left out of the build.
+if [ -n "$(git status --porcelain -- . ':(exclude)debian' ":(exclude)$spec")" ]; then
+  die "commit the changes outside $spec and debian/ first; the build takes them from HEAD"
+fi
+# The package installs debian/copyright as its notices file.
+scripts/gen-copyright --check
+. packaging/sherpa-onnx.env
+
+deb_version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
+[ -n "$deb_version" ] || die "cannot read the version from debian/changelog"
+upstream=${deb_version#*:}
+upstream=${upstream%-*}
+version=$(sed -n 's/^Version:[[:space:]]*//p' "$spec")
+[ "$version" = "$upstream" ] ||
+  die "Version in $spec ($version) differs from the upstream version in debian/changelog ($upstream)"
+base=koeinput_$upstream
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# scripts/make-orig makes missing tarballs, and stops when the main tarball no
+# longer matches HEAD (the other two follow from files in it).
+current=yes
+for file in "$base.orig.tar.xz" "$base.orig-vendor.tar.xz" "$base.orig-sherpaonnx.tar.bz2"; do
+  [ -e "target/deb/$file" ] || current=no
+done
+if [ $current = yes ]; then
+  git archive --format=tar --prefix="koeinput-$upstream/" HEAD -- . ':(exclude)debian' >"$tmp/main.tar"
+  xz -dc "target/deb/$base.orig.tar.xz" | cmp -s - "$tmp/main.tar" || current=no
+fi
+if [ $current = no ]; then
+  [ -z "$(git status --porcelain)" ] || die "the orig tarballs are missing or older than HEAD,
+and scripts/make-orig needs a clean tree: commit the changes in $spec and debian/
+(or set them aside), run scripts/make-orig, then run scripts/build-rpm again"
+  scripts/make-orig
+fi
+sum=$(sha256sum "target/deb/$base.orig-sherpaonnx.tar.bz2" | cut -d' ' -f1)
+[ "$sum" = "$SHERPA_ONNX_SHA256" ] ||
+  die "target/deb/$base.orig-sherpaonnx.tar.bz2 has SHA-256 $sum, not the pinned $SHERPA_ONNX_SHA256"
+
+containerfile=packaging/containers/rpm-$dist.Containerfile
+image="localhost/koeinput-rpm-$dist:$(sha256sum "$containerfile" | cut -c1-12)"
+if ! podman image exists "$image"; then
+  nice -n 10 podman build -t "$image" -f "$containerfile" packaging/containers
+fi
+
+out=target/rpm/$dist
+rm -rf "$out"
+mkdir -p "$out"
+
+# Runs in the container: rpmbuild -ba from the sources, then rpmlint on the spec
+# and every package. rpmlint errors fail the build; warnings are listed only.
+build='
+set -eu
+top=/tmp/rpmbuild
+mkdir -p "$HOME" $top/SOURCES $top/SPECS
+for f in /src/target/deb/$BASE.orig*; do ln -s "$f" $top/SOURCES/; done
+cp /src/debian/copyright $top/SOURCES/copyright
+cp /src/packaging/rpm/koeinput.spec $top/SPECS/
+rpmbuild -ba --define "_topdir $top" $top/SPECS/koeinput.spec
+cp $top/RPMS/*/*.rpm $top/SRPMS/*.rpm /out/
+status=0
+rpmlint $top/SPECS/koeinput.spec /out/*.rpm >/out/rpmlint.txt 2>&1 || status=$?
+cat /out/rpmlint.txt
+if grep -q ": E: " /out/rpmlint.txt; then
+  echo "rpmlint reported errors" >&2
+  exit 1
+fi
+[ $status -eq 0 ] || { echo "rpmlint failed with status $status" >&2; exit 1; }
+'
+# tini as PID 1 passes signals on, so Ctrl-C or a timeout stops the build.
+# (podman run --init would need catatonit on the host.)
+{
+  nice -n 10 podman run --rm --network=none --userns=keep-id \
+    -v "$root:/src:ro" -v "$root/$out:/out" \
+    -e HOME=/tmp/home -e BASE="$base" \
+    "$image" tini -g -- sh -c "$build" || echo $? >"$tmp/failed"
+} 2>&1 | tee "$out/build.log"
+if [ -e "$tmp/failed" ]; then
+  die "the build failed; see $out/build.log"
+fi
+echo "packages and rpmlint output in $out/"
