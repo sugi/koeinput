@@ -182,6 +182,7 @@ cargo test %{cargo_flags}
 %files
 # No %%systemd_user_post: the unit has no [Install] section, and D-Bus starts it.
 %license LICENSE-MIT LICENSE-APACHE copyright packaging/licenses/*
+%doc README.md README.ja.md
 %{_bindir}/koeinput
 %dir %{_libexecdir}/koeinput
 %{_libexecdir}/koeinput/koeinput-daemon
@@ -193,6 +194,7 @@ cargo test %{cargo_flags}
 
 %files -n fcitx5-koeinput -f fcitx5-koeinput.lang
 %license LICENSE-MIT LICENSE-APACHE
+%doc README.md
 %{_libdir}/fcitx5/libkoeinput.so
 %{_datadir}/fcitx5/addon/koeinput.conf
 
