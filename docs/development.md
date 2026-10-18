@@ -111,7 +111,7 @@ KOEINPUT_DEV_IMAGE=bookworm scripts/addon test
 - `daemonclient_activation` checks that start request. It runs on its own private bus, which finds an activation file for the test daemon in `target/addon/test-services/` (written by `scripts/addon test`, passed through `XDG_DATA_DIRS`). The other tests run on a bus without that file: on a bus that can start the daemon, every call to it starts one, so they could neither test "no daemon" nor start their own daemons.
 - The Debian 12 run skips `daemonclient`, `daemonclient_activation` and the daemon scenarios of the addon test, because the daemon is built only in the Debian 13 image.
 - The addon test uses its own `dbus.conf`. The system one depends on the `keyboard` addon, which is built into the fcitx5 binary and cannot load in a test instance.
-- `translation` checks that `addon/po/ja.po` compiles. To regenerate the catalog, run `scripts/dev sh -c 'xgettext --keyword=_ --language=C++ --from-code=UTF-8 --add-comments --package-name=fcitx5-koeinput -o addon/po/fcitx5-koeinput.pot addon/src/*.cpp addon/src/*.h'`.
+- `translation` checks that `addon/po/ja.po` compiles. To regenerate the catalog, run `scripts/dev sh -c 'xgettext --keyword=_ --keyword=N_ --language=C++ --from-code=UTF-8 --add-comments --package-name=fcitx5-koeinput -o addon/po/fcitx5-koeinput.pot addon/src/*.cpp addon/src/*.h'`.
 
 ### Compatibility with fcitx5 5.0
 
@@ -129,7 +129,10 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput. 
 - the hotkey (default Right Alt);
 - tap mode: a short press keeps recording until the next press;
 - the tap threshold in milliseconds;
-- whether to show partial text while you speak.
+- partial text: where the text you are still speaking appears. "In the app" (the default) puts it into the app's text field as underlined preedit, or into the fcitx5 panel when the app has no preedit. "In the panel" always uses the panel. "Off" shows only the status;
+- apps that show partial text in the panel: program names that use the panel whatever the partial text setting says. Case does not matter; spaces around a name are ignored. Use it for apps that commit their own composition on blur, such as text-input-v3 clients (Chrome, Discord). To find the name fcitx5 uses for an app, focus a text field in the app and run `fcitx5-diagnose`: the "Input Context" list in its output names the program of each context (the same list comes from `dbus-send --session --print-reply --dest=org.fcitx.Fcitx5 /controller org.fcitx.Fcitx.Controller1.DebugInfo`). Apps without a program name follow the main setting.
+
+Configs from before the "Partial text" setting have the boolean `ShowPartial`. The addon reads `ShowPartial=False` as "Off"; the next save from the settings writes `PartialText=Off`.
 
 ### Host check
 

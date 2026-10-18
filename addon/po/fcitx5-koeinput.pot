@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: fcitx5-koeinput\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-10-17 20:38+0000\n"
+"POT-Creation-Date: 2026-10-17 22:06+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,74 +17,90 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: addon/src/koeinput.cpp:28
+#: addon/src/koeinput.cpp:30
 msgid "Preparing…"
 msgstr ""
 
-#: addon/src/koeinput.cpp:29
+#: addon/src/koeinput.cpp:31
 msgid "Recording"
 msgstr ""
 
-#: addon/src/koeinput.cpp:30
+#: addon/src/koeinput.cpp:32
 msgid "Recording (press again to finish)"
 msgstr ""
 
-#: addon/src/koeinput.cpp:31
+#: addon/src/koeinput.cpp:33
 msgid "Recognizing…"
 msgstr ""
 
-#: addon/src/koeinput.cpp:42
+#: addon/src/koeinput.cpp:44
 msgid "The KoeInput daemon is not running."
 msgstr ""
 
-#: addon/src/koeinput.cpp:43
+#: addon/src/koeinput.cpp:45
 msgid "The speech model is not ready."
 msgstr ""
 
-#: addon/src/koeinput.cpp:44
+#: addon/src/koeinput.cpp:46
 msgid "Another dictation is running."
 msgstr ""
 
-#: addon/src/koeinput.cpp:45
+#: addon/src/koeinput.cpp:47
 msgid "The KoeInput daemon does not respond."
 msgstr ""
 
-#: addon/src/koeinput.cpp:46
+#: addon/src/koeinput.cpp:48
 msgid "Cannot record from the microphone."
 msgstr ""
 
-#: addon/src/koeinput.cpp:47
+#: addon/src/koeinput.cpp:49
 msgid "Speech recognition failed."
 msgstr ""
 
-#: addon/src/koeinput.cpp:48
+#: addon/src/koeinput.cpp:50
 msgid "The KoeInput daemon reported an error."
 msgstr ""
 
-#: addon/src/koeinput.cpp:49
+#: addon/src/koeinput.cpp:51
 msgid "The KoeInput daemon stopped."
 msgstr ""
 
-#: addon/src/koeinput.cpp:50
+#: addon/src/koeinput.cpp:52
 msgid "Dictation failed."
 msgstr ""
 
-#: addon/src/koeinput.cpp:205
+#: addon/src/koeinput.cpp:267
 msgid "KoeInput"
 msgstr ""
 
-#: addon/src/config.h:13
-msgid "Hotkey"
-msgstr ""
-
-#: addon/src/config.h:16
-msgid "Tap to keep recording"
-msgstr ""
-
-#: addon/src/config.h:18
-msgid "Tap threshold (ms)"
+#: addon/src/config.h:19
+msgid "In the app"
 msgstr ""
 
 #: addon/src/config.h:19
-msgid "Show partial results"
+msgid "In the panel"
+msgstr ""
+
+#: addon/src/config.h:19
+msgid "Off"
+msgstr ""
+
+#: addon/src/config.h:34
+msgid "Hotkey"
+msgstr ""
+
+#: addon/src/config.h:37
+msgid "Tap to keep recording"
+msgstr ""
+
+#: addon/src/config.h:39
+msgid "Tap threshold (ms)"
+msgstr ""
+
+#: addon/src/config.h:41
+msgid "Partial text"
+msgstr ""
+
+#: addon/src/config.h:43
+msgid "Apps that show partial text in the panel"
 msgstr ""

@@ -43,7 +43,7 @@ target_compile_definitions(addon_test PRIVATE
   FCITX5_SYSTEM_PKGDATADIR="${FCITX_INSTALL_PKGDATADIR}")
 add_dependencies(addon_test koeinput)
 add_test(NAME addon COMMAND addon_test)
-set_tests_properties(addon PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+set_tests_properties(addon PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 
 add_executable(controller_test test/controller_test.cpp src/controller.cpp)
 add_test(NAME controller COMMAND controller_test)

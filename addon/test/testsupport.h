@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -115,17 +117,22 @@ public:
         for (auto &s : env) envp.push_back(s.data());
         envp.push_back(nullptr);
 
-        std::string log = dir_ + "/stderr.log";
+        // Prepared before the fork: only async-signal-safe calls are allowed in the child.
+        const std::string exe = binary();
+        const std::string log = dir_ + "/stderr.log";
+        const int logFd = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        if (logFd < 0) die("cannot open " + log + ": " + std::strerror(errno));
+        const std::string execFailed = "DaemonProcess: execve " + exe + " failed\n";
+        char *argv[] = {const_cast<char *>(exe.c_str()), nullptr};
         pid_ = fork();
         if (pid_ == 0) {
-            FILE *f = std::freopen(log.c_str(), "w", stderr);
-            (void)f;
-            char *argv[] = {const_cast<char *>(binary()), nullptr};
+            dup2(logFd, 2);
             execve(argv[0], argv, envp.data());
-            std::fprintf(stderr, "execve %s: %s\n", argv[0], std::strerror(errno));
-            std::fflush(stderr);
+            ssize_t n = write(2, execFailed.data(), execFailed.size());
+            (void)n;
             _exit(127);
         }
+        close(logFd);
         if (pid_ < 0) die(std::string("fork failed: ") + std::strerror(errno));
         waitUntilReady();
     }
@@ -134,18 +141,24 @@ public:
 
     void stop() {
         if (pid_ <= 0) return;
-        ::kill(pid_, SIGTERM);
-        int status = 0;
-        waitpid(pid_, &status, 0);
-        pid_ = -1;
+        terminate();
         // Wait until the bus has released the name, so the next daemon can take it.
         for (int i = 0; i < 100 && ownerPresent(); ++i) usleep(20000);
+        std::error_code ec;
+        std::filesystem::remove_all(dir_, ec);
     }
 
 private:
     [[noreturn]] static void die(const std::string &message) {
         std::fprintf(stderr, "DaemonProcess: %s\n", message.c_str());
         std::abort();
+    }
+
+    void terminate() {
+        ::kill(pid_, SIGTERM);
+        int status = 0;
+        waitpid(pid_, &status, 0);
+        pid_ = -1;
     }
 
     static bool ownerPresent() {
@@ -178,6 +191,8 @@ private:
             }
             usleep(50000);
         }
+        // The directory stays, so the log can be read.
+        terminate();
         die("daemon did not become ready; log in " + dir_ + "/stderr.log");
     }
 
