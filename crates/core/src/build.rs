@@ -41,6 +41,21 @@ fn catalog(paths: &Paths) -> Result<Catalog, BuildError> {
     Catalog::load(&paths.catalog_file).map_err(|e| BuildError::Catalog(e.to_string()))
 }
 
+/// Whether the files of the configured (or default) main model and the VAD model are installed.
+/// A catalog or configuration error counts as not installed; `load_main` reports the cause.
+pub fn main_model_installed(paths: &Paths, cfg: &Config) -> bool {
+    let Ok(catalog) = catalog(paths) else {
+        return false;
+    };
+    let entry = match &cfg.model {
+        Some(id) => catalog.get(id),
+        None => catalog.default_model(),
+    };
+    [entry, catalog.get(VAD_MODEL_ID)]
+        .into_iter()
+        .all(|e| e.is_some_and(|e| e.is_installed(&paths.models_dir)))
+}
+
 /// The engine without the final-stage model.
 pub fn load_main(paths: &Paths, cfg: &Config) -> Result<(Engine, String), BuildError> {
     let catalog = catalog(paths)?;

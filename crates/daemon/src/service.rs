@@ -22,7 +22,16 @@ pub enum KoeError {
 pub enum Readiness {
     Loading,
     Ready(Arc<Engine>),
+    /// The model is not installed; a Start checks again, since it may have been installed since.
+    NoModel(String),
+    /// A failure that a Start does not retry.
     Missing(String),
+}
+
+/// Lets a Start load a model that was installed after the daemon started.
+pub struct Reloader {
+    pub installed: Box<dyn Fn() -> bool + Send + Sync>,
+    pub spawn: Box<dyn Fn() + Send + Sync>,
 }
 
 pub struct Current {
@@ -51,6 +60,8 @@ const LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
 
 pub struct Recognizer1 {
     pub shared: Arc<Mutex<Shared>>,
+    /// Set once the interface is served, since the loader needs the interface reference.
+    pub reloader: Arc<std::sync::OnceLock<Reloader>>,
 }
 
 #[interface(name = "org.nemui.KoeInput.Recognizer1")]
@@ -71,6 +82,26 @@ impl Recognizer1 {
             .to_owned();
         let emitter =
             SignalEmitter::new(conn, OBJECT_PATH)?.set_destination(BusName::Unique(owner.clone()));
+        let no_model = matches!(self.shared.lock().unwrap().readiness, Readiness::NoModel(_));
+        if no_model
+            && let Some(reloader) = self.reloader.get()
+            && tokio::task::block_in_place(|| (reloader.installed)())
+        {
+            // Another Start may have begun the load meanwhile, and shutdown may have begun.
+            let begin = {
+                let mut s = self.shared.lock().unwrap();
+                let begin = matches!(s.readiness, Readiness::NoModel(_));
+                if begin {
+                    s.readiness = Readiness::Loading;
+                    s.load_finished.send_replace(false);
+                }
+                begin
+            };
+            if begin {
+                tracing::info!("the model is installed now; loading it");
+                (reloader.spawn)();
+            }
+        }
         let mut load_finished = {
             let s = self.shared.lock().unwrap();
             matches!(s.readiness, Readiness::Loading).then(|| s.load_finished.subscribe())
@@ -89,7 +120,9 @@ impl Recognizer1 {
                 Readiness::Loading => {
                     return Err(KoeError::NoModel("the model is still loading".into()));
                 }
-                Readiness::Missing(hint) => return Err(KoeError::NoModel(hint.clone())),
+                Readiness::NoModel(hint) | Readiness::Missing(hint) => {
+                    return Err(KoeError::NoModel(hint.clone()));
+                }
             };
             // One metadata call per session; the small TSV is read under the lock only after a change.
             if let Some(post) = s.dictionary.reload() {
@@ -218,6 +251,15 @@ pub fn test_delay(var: &str) -> Option<std::time::Duration> {
         .parse()
         .ok()
         .map(std::time::Duration::from_millis)
+}
+
+/// The fake "no model installed" condition: `KOEINPUT_TEST_NO_MODEL=1`, lifted once the file named
+/// by `KOEINPUT_TEST_NO_MODEL_FILE` exists.
+#[cfg(feature = "test-hooks")]
+pub fn test_no_model() -> bool {
+    std::env::var("KOEINPUT_TEST_NO_MODEL").as_deref() == Ok("1")
+        && !std::env::var("KOEINPUT_TEST_NO_MODEL_FILE")
+            .is_ok_and(|f| std::path::Path::new(&f).exists())
 }
 
 /// Blocks until the file named by `var` exists, so a test decides when a load may finish.
