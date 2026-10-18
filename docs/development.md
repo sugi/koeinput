@@ -230,6 +230,43 @@ After the steps in [sherpa-onnx libraries](#sherpa-onnx-libraries), the package 
 
 After a change of `Cargo.lock`, run `scripts/gen-copyright` and read the diff of `debian/copyright`. build-deb fails when a vendored crate has no paragraph. A change of `Cargo.lock` also changes the vendor tarball, so after a release it needs a new upstream version.
 
+## Arch Linux packages
+
+`packaging/arch/PKGBUILD` is a split package. It builds `koeinput` and `fcitx5-koeinput` with the same contents as the Debian packages, and makepkg adds `koeinput-debug` with the debug symbols.
+
+```sh
+scripts/build-arch
+scripts/test-arch
+```
+
+- The sources are the three orig tarballs of the Debian package, under the same names. `scripts/build-arch` runs `scripts/make-orig` when they are missing or older than HEAD, with the same rules as build-deb (see [The main tarball changes with every commit](#the-main-tarball-changes-with-every-commit)).
+- The committed PKGBUILD pins the SHA-256 of the sherpa-onnx archive (the value in `packaging/sherpa-onnx.env`). The main and vendor tarballs have `SKIP`: the main tarball contains the PKGBUILD itself, and both change with commits and `Cargo.lock`.
+- `scripts/build-arch` builds in the image from `packaging/containers/arch.Containerfile` (`archlinux:latest` with the build tools and a build user, because makepkg refuses to run as root). In a container without network, it:
+  1. copies the PKGBUILD from the work tree and the three tarballs to the build user;
+  2. checks that the PKGBUILD's sherpa-onnx source and sum are the ones in `packaging/sherpa-onnx.env`;
+  3. fills in the real sums on that copy with `updpkgsums`;
+  4. runs `makepkg -s --noconfirm`. All dependencies are in the image, so nothing is installed. If the PKGBUILD needs a package that the image does not have, the build stops and names it; add it to the Containerfile;
+  5. runs `namcap` on the PKGBUILD and the packages.
+
+  The packages, the PKGBUILD with the real sums, `build.log` and `namcap.txt` go to `target/arch/`. The script fails on namcap errors and warnings, except for the ones listed and explained in it.
+- Files outside `packaging/arch/` come from HEAD through the main tarball, so commit them first. The PKGBUILD comes from the work tree.
+- The package build runs `cargo test`, the addon's `controller` test and `scripts/check-no-gpl` (before makepkg strips the binaries), as the Debian build does.
+- The PKGBUILD turns off makepkg's LTO. With LTO, the C code in the crates becomes GCC LTO bytecode, which Rust's linker (lld) cannot read.
+- Arch is a rolling release, but the image is built only once for each version of the Containerfile. To build with current packages, remove the image: `podman rmi $(podman images -q localhost/koeinput-arch)`.
+- The addon goes to `/usr/lib/fcitx5/`. The license texts go to `/usr/share/licenses/koeinput/` (with `sherpa-onnx/` for the sherpa-onnx archive and `crates/` for the license files of the crates in the binaries) and `/usr/share/licenses/fcitx5-koeinput/`.
+- The daemon stays in `/usr/libexec/koeinput/`, the path in the D-Bus service file and the user unit. namcap reports this, because Arch puts such programs in `/usr/lib/`.
+- `scripts/test-arch` installs the two packages with `pacman -U` in a fresh `archlinux:latest` container and runs the same checks as test-deb, with `pacman -R` for the removal. pacman downloads the dependencies, so it needs the network. The image leaves out man pages and translations (`NoExtract` in `/etc/pacman.conf`), so the test removes those lines before it installs the packages. The output is also saved in `target/arch/test.log`.
+
+To install on an Arch Linux machine:
+
+```sh
+sudo pacman -U target/arch/koeinput-0.1.0-1-x86_64.pkg.tar.zst target/arch/fcitx5-koeinput-0.1.0-1-x86_64.pkg.tar.zst
+```
+
+Then install a model and restart fcitx5, as in [Install on the host](#install-on-the-host) from step 3.
+
+For a new version, set `pkgver` in the PKGBUILD to the new upstream version and keep `pkgrel=1`. build-arch stops when `pkgver` differs from the upstream version in `debian/changelog`.
+
 ## Install on the host
 
 Build and test the packages in the dev container first:
