@@ -11,6 +11,7 @@ Kept with a reason:
 - Decoding a whole utterance, parakeet-ja puts no `。` inside the text, even where a sentence really ends (none of the 3 sentence ends inside the read sentences). The final-stage model `cohere-transcribe` placed all 3. This is the model's punctuation, not a rule we can fix after recognition.
 - Model download: a download that stalls mid-body hangs `koeinput model install`. There is no idle timeout, and ureq 3 has no per-read timeout. Ctrl-C stops it, and the install is atomic, so a stalled download leaves no half-installed model.
 - Addon and daemon: a `Stop` or `Cancel` that the addon sends in the few milliseconds between the daemon losing its bus name and the addon seeing `NameOwnerChanged` can make the bus start a new daemon (D-Bus activation). Such calls should carry the `NO_AUTO_START` flag, but fcitx5's D-Bus API has no portable way to set it, and the window is milliseconds.
+- Addon and daemon: the addon ends a session when `Final` arrives, but the daemon frees the session only when it sends the `done` state right after. A hotkey press in that gap (normally under a millisecond) gets `Busy`. The fix would be for the daemon to free the session before it sends `Final` or `Error`, which changes the order clients see.
 
 ## M5 (formats and release)
 
