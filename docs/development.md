@@ -188,7 +188,7 @@ Build the packages for each release on its own: they depend on the library versi
     - Debian testing and Ubuntu 26.04 have new enough Rust.
 
     `debian/rules` stops with a message when `rustc` is older than 1.89.
-  - The Ubuntu builds get their own version: in the container, before the package build, the script adds a local entry to `debian/changelog` with `dch --local ~<dist> --distribution <dist>`. The packages are then `0.1.0-1~noble1` and `0.1.0-1~resolute1`. The entry takes the date of the committed top entry, so the build date does not depend on when it runs. lintian reports this as an error (`latest-changelog-entry-without-new-date`), so the Ubuntu builds suppress that tag. The committed `debian/changelog` does not change, and the Debian builds keep `0.1.0-1`.
+  - The Ubuntu builds get their own version: in the container, before the package build, the script adds a local entry to `debian/changelog` with `dch --local ~<dist> --distribution <dist>`. The packages are then `0.1.0-1~noble1` and `0.1.0-1~resolute1`. The entry is dated one second after the committed top entry, so the build date does not depend on when it runs, and the entry is newer than the one below it, as lintian wants. The committed `debian/changelog` does not change, and the Debian builds keep `0.1.0-1`.
 
     The Ubuntu builds print `dpkg-genchanges: warning: the current version (0.1.0-1~<dist>1) is earlier than the previous one (0.1.0-1)`. This is expected: the local `~<dist>1` entry sits above `-1` on purpose, and `~` sorts before the end of the version.
   - Ubuntu names the debug symbol packages `*-dbgsym_*.ddeb` instead of `*-dbgsym_*.deb`. They go to `target/deb/<dist>/` too.
