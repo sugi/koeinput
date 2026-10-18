@@ -4,9 +4,10 @@ KoeInput downloads speech models from the k2-fsa/sherpa-onnx `asr-models` releas
 `data/models.toml` is the catalog (id, URL, SHA-256, size, license). `koeinput model list` prints the licenses.
 The licenses below are the ones the upstream model pages state. They apply to the models, not to KoeInput.
 
-Every archive was converted to ONNX by the sherpa-onnx project (k2-fsa) and published at
+The archives are published by the sherpa-onnx project (k2-fsa) at
 <https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models>.
-The `int8` ones are also quantized by the sherpa-onnx project.
+`zipformer-ja` (the ONNX files come from reazon-research/reazonspeech-k2-v2) and `silero-vad` (snakers4/silero-vad publishes `silero_vad.onnx`) are republished unchanged.
+The other models were converted by sherpa-onnx (see its export scripts); the `int8` ones are also quantized by it.
 
 | Id | Model | Author | License | Upstream |
 |---|---|---|---|---|
@@ -25,8 +26,8 @@ The default model is licensed under [CC-BY-4.0](https://creativecommons.org/lice
 - Author: NVIDIA (NeMo team)
 - Source: <https://huggingface.co/nvidia/parakeet-tdt_ctc-0.6b-ja>
 - License: CC-BY-4.0, <https://creativecommons.org/licenses/by/4.0/>
-- Changes: the model was converted to ONNX and quantized to int8 by the sherpa-onnx project
-  (<https://github.com/k2-fsa/sherpa-onnx>, conversion script in `scripts/nemo/parakeet-tdt_ctc-0.6b-ja`).
+- Changes: the sherpa-onnx project (<https://github.com/k2-fsa/sherpa-onnx>) exported only the CTC decoder branch of the model to ONNX (the TDT decoder is not included), quantized it to int8 (dynamic QUInt8) and replaced the ONNX metadata
+  (script: `scripts/nemo/parakeet-tdt_ctc-0.6b-ja/export-onnx-ctc.py`).
   KoeInput makes no further change to the model.
 
 Keep this notice when you redistribute the model. NVIDIA does not endorse KoeInput.
@@ -36,6 +37,7 @@ Keep this notice when you redistribute the model. NVIDIA does not endorse KoeInp
 The Hugging Face page names the license "model-license", the FunASR Model Open Source License Agreement
 (<https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE>).
 In short, you may use, copy, modify and share the model if you credit the source and author and keep the model name; this also applies to derived models.
+The license also ends if you breach it, can be withdrawn for denigrating the software, and can be revised by Alibaba.
 Read the agreement itself before you redistribute the model.
 The credit is: SenseVoiceSmall by FunAudioLLM (Alibaba), <https://huggingface.co/FunAudioLLM/SenseVoiceSmall>.
 
@@ -45,8 +47,3 @@ ReazonSpeech k2-v2, Qwen3-ASR and Cohere Transcribe are under the
 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0); Silero VAD is under the MIT license.
 Keep the license text and copyright notice of the upstream project when you redistribute them.
 The pages above hold the license files.
-
-## Not checked
-
-The archives' own README files were not compared with the upstream model cards.
-If a model page and `data/models.toml` differ, the upstream page is right; fix the catalog.

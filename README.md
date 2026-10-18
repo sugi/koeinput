@@ -11,7 +11,7 @@ Speech recognition runs on your computer (sherpa-onnx, CPU only). Audio and text
 
 - Linux on amd64 (x86-64) with fcitx5 and a user session bus (systemd user session).
 - A microphone.
-- About 2 GB of free RAM for the default model, and about 0.5 GB of disk space for it.
+- About 2 GB of free RAM for the default model, and about 1.2 GB of free disk space to install it (the model takes about 0.7 GB; the archive is saved before it is extracted).
 
 arm64 is not supported yet.
 
@@ -45,7 +45,7 @@ sudo dnf install ./koeinput-0.1.0-1.fc44.x86_64.rpm ./fcitx5-koeinput-0.1.0-1.fc
 sudo pacman -U koeinput-0.1.0-1-x86_64.pkg.tar.zst fcitx5-koeinput-0.1.0-1-x86_64.pkg.tar.zst
 ```
 
-The daemon is not enabled at install. D-Bus starts it when fcitx5 loads the addon or when you run `koeinput`.
+The daemon is not running after install. D-Bus starts it when fcitx5 loads the addon, or when you run a command such as `koeinput status`.
 
 ### Install a speech model
 
@@ -56,7 +56,7 @@ koeinput model install parakeet-ja
 ```
 
 This also downloads the voice activity detector (Silero VAD).
-If you downloaded the archive yourself, add `--from-file <archive>`.
+If you downloaded the archive yourself, add `--from-file <archive>`. This still downloads Silero VAD when it is missing; for a fully offline install, install it first with `koeinput model install silero-vad --from-file silero_vad.onnx`.
 If the daemon was already running, run `systemctl --user restart koeinput`; it looks for the model only when it starts.
 
 Then restart fcitx5 so that it loads the addon. In a Plasma session, choose "None" and then "Fcitx 5" again under Virtual Keyboard in System Settings.
@@ -74,10 +74,11 @@ Focus any text field and use the hotkey (Right Alt by default):
 
 - Hold it, speak, and release. The text arrives shortly after you release the key.
 - Or tap it, speak, and press it again. Use this for long dictation.
-- Esc cancels. So does any other key you press during a session.
+- Esc cancels. So does any other key while recording; Shift or Ctrl alone does not. After you finish, another key only clears the display and the text still arrives.
+- A recording stops by itself after 2 minutes (`max_length_ms`).
 - While Mozc is composing, the hotkey does nothing. Password fields do not start recording.
 
-While you speak, the panel or the app shows the status ("Recording") and the text recognized so far.
+The status ("Recording") always shows in the fcitx5 panel. The text recognized so far can show in the app or in the panel, as set below.
 If Right Alt acts as AltGr on your keyboard layout, choose another hotkey in the settings.
 
 ### Settings
@@ -86,7 +87,7 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput (
 
 - Hotkey, tap mode and the tap threshold (how short a press counts as a tap).
 - Partial text: "In the app" (the default) shows it underlined in the text field, "In the panel" shows it in the fcitx5 panel, "Off" shows only the status.
-- Apps that show partial text in the panel: program names that always use the panel. Use it for apps that commit their own composition when they lose focus, such as Chrome and Discord. To find the name of an app, focus a text field in it and run `fcitx5-diagnose`; the "Input Context" list names the program of each context.
+- Apps that show partial text in the panel: program names that always use the panel. Use it for apps that commit their own composition when they lose focus, such as Chrome and Discord. To find the name of an app, focus a text field in it and run `fcitx5-diagnose`; in the debug information from D-Bus, the lines with `program:` name the program of each input context.
 
 ### Dictionary
 
@@ -110,16 +111,19 @@ koeinput model use ID --final        # a second model that decodes the final tex
 koeinput model use --final none      # turn the final-stage model off
 ```
 
+After `model use`, with or without `--final`, run `systemctl --user restart koeinput`.
+
 A final-stage model re-decodes the whole utterance after you finish, while the default model keeps producing the partial text.
 It can be more accurate but is slower and uses more memory.
+It is used only for utterances up to 30 s (`final_full_max_ms`); longer ones use the default model's segments.
 [docs/spike-results.md](docs/spike-results.md) compares the models on one speaker's recordings. Treat it as a rough guide, not a benchmark.
 Models are listed with their origin and license in [docs/models.md](docs/models.md).
 
 ## Privacy
 
 - Recognition runs locally. KoeInput sends no audio or text anywhere.
-- The network is used only when you install a model, which downloads it from its publisher's release page.
-- Recognized text is not written to logs.
+- The only network use is the model download, from the sherpa-onnx project's GitHub release page (github.com/k2-fsa/sherpa-onnx, release `asr-models`).
+- Recognized text is not written to logs. Setting `KOEINPUT_LOG_TEXT=1` for the daemon turns that on; use it for debugging only.
 
 ## Troubleshooting
 
@@ -129,8 +133,8 @@ journalctl --user -u koeinput    # daemon log
 systemctl --user restart koeinput
 ```
 
-- `ready: no` with an install hint: the model is not installed yet, or the daemon needs a restart after you installed it.
-- No status text or no recording: restart fcitx5, and check that `fcitx5-koeinput` is installed and enabled in the input method settings.
+- `ready: no`: the model is still loading, is not installed, or the daemon needs a restart after you installed it. `journalctl --user -u koeinput` gives the reason.
+- No status or no recording: restart fcitx5, and check that `fcitx5-koeinput` is installed and enabled in the input method settings.
 - The addon's messages are in fcitx5's output; with KWin look in `journalctl --user -b | grep -i koeinput`.
 - `man koeinput` describes every command.
 
@@ -138,11 +142,11 @@ systemctl --user restart koeinput
 
 KoeInput is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
 
-Binaries link statically with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0), ONNX Runtime (MIT) and other third-party code under permissive licenses.
+Binaries link statically with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0), ONNX Runtime (MIT) and other third-party code under permissive licenses, plus MPL-2.0 for Eigen (file-level copyleft).
 No GPL code is in the binaries: builds use the sherpa-onnx archive without text to speech, and `scripts/check-no-gpl` checks every build.
-The license texts and copyright notices are installed in `/usr/share/doc/koeinput/` and summarized in [debian/copyright](debian/copyright).
+The license texts and copyright notices are installed in `/usr/share/doc/koeinput/copyright` (Debian and Ubuntu) or `/usr/share/licenses/koeinput/` (Fedora and Arch), and summarized in [debian/copyright](debian/copyright).
 
-The speech models are not part of the packages and have their own licenses. The default model is CC-BY-4.0 and needs the attribution given in [docs/models.md](docs/models.md).
+The speech models are not part of the packages and have their own licenses. The default model is CC-BY-4.0; if you share the model, you need the attribution given in [docs/models.md](docs/models.md).
 
 ## More
 

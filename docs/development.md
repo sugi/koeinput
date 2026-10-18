@@ -309,3 +309,8 @@ The addon's messages are in fcitx5's output. When KWin starts fcitx5, look in th
 ## Privacy
 
 Recognized text is never written to logs unless you set `KOEINPUT_LOG_TEXT=1`.
+
+## Model catalog maintenance
+
+The archives' own README files were not compared with the upstream model cards when `docs/models.md` was written.
+If a model page and `data/models.toml` differ, the upstream page is right: fix the catalog and `docs/models.md`.
