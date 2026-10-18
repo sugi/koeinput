@@ -156,8 +156,8 @@ Measured on 2026-10-17:
 - **Decided** (2026-10-18): If Mozc is composing when the hotkey is pressed, do not start recording, and pass the key to Mozc.
 - **Decided** (2026-10-18): M2 already shows partial results, as preedit in the app.
   Apps without preedit support get them in the fcitx5 panel.
-- **Open**: Whether partial results should move to the fcitx5 panel for some apps. Decide in M4 after daily use.
-  Terminals and Emacs handle inline preedit differently.
+- **Decided** (M4, 2026-10-18): Partial results can move to the fcitx5 panel, for every app or for listed apps, with the "Partial text" setting (see [Quality (M4)](#quality-m4)). The default stays in the app.
+  Terminals and Emacs handle inline preedit differently; the host check tells which apps need the list.
 - **Open**: Cancel with Esc, a maximum recording length, and what to show when the daemon does not respond.
 - **Open**: Undo of the last commit. It depends on app support for surrounding text.
 
@@ -182,7 +182,7 @@ Measured on 2026-10-17:
 - **Recommended**: Accept WAV files as input as well as the microphone, so tests and replay use the same code path.
 - **Recommended**: Run one model at a time, chosen in the config. No parallel multi-model runs in the daemon.
 - **Recommended**: Keep the model loaded in memory.
-- **Recommended**: Measure latency with the CPU under load as well. This machine often runs builds.
+- **Recommended**: Measure latency with the CPU under load as well. This machine often runs builds. Done in M4: [m4-results.md](m4-results.md).
 - **Open**: The D-Bus interface (methods and signals).
 
 ## Evaluation
@@ -269,6 +269,7 @@ Notes:
 5. Done (2026-10-17): M1, the daemon and the CLI, merged into `main`. The microphone check with `koeinput listen` is still to be done by the user.
 6. Done (2026-10-18): M2, the minimal fcitx5 addon, merged into `main`.
 7. Done (2026-10-18): M3, the Debian packages. The host install and the host check are pending for the user. Current state: [status.md](status.md).
+8. Implemented (2026-10-18): M4, quality, on branch `m4-quality`; the final review and the merge are pending. Measured defaults in [m4-results.md](m4-results.md).
 
 ## Debian packages
 
@@ -283,6 +284,20 @@ Decided for M3 on 2026-10-18 (details in [the M3 spec](superpowers/specs/2026-10
 - **Decided**: debhelper compat 13, which Debian 13 and testing both support. No dh-cargo, because our crates are not in Debian; the crates come from a vendor tarball, and the build runs offline.
 - **Decided**: The copyright lines of each crate in `debian/copyright` come from the crate's license files. Cargo `authors` are used only when those files name no holder. `scripts/gen-copyright` generates the file.
 - **Decided**: The daemon is not enabled at login. D-Bus starts it on demand through the systemd user unit, and the addon asks for it when fcitx5 loads the addon, so the model is loaded by the first dictation.
+
+## Quality (M4)
+
+Decided for M4 on 2026-10-18 (details in [the M4 spec](superpowers/specs/2026-10-18-m4-quality-design.md), numbers in [m4-results.md](m4-results.md)):
+
+- **Decided**: The final text comes from one decode of the whole utterance, from the first speech to the end of the recording, when that span is at most `final_full_max_ms`. Longer recordings join the segment texts as before. The default stays at 30000 (30 s), as measured on the user's recordings:
+  - accuracy is the same: 256 character errors against 255 with the segment join, out of 920 reference characters (CER 27.8% and 27.7%);
+  - for recordings up to 30 s, the `。` in the middle of a sentence is gone: 1 in the 25 read sentences before, 0 after. In free speech, the `。` inside the text went from 4 to 1, and that one is in the only recording longer than 30 s, which still uses the segment join;
+  - it costs time: final p90 0.41 s instead of 0.02 s without load, 0.78 s with every CPU busy. With the 250 ms tail that is about 1 s, within the 2 s target. The decode time grows with the length (1.05 s for a 22 s recording under load), so a 60 s limit would likely miss the target under load; the limit stays at 30 s.
+- **Decided**: `threads` stays at 8. It was the fastest without load and with all 24 hardware threads busy at nice 10: final p90 0.78 s against 1.17 s with 4 threads and 0.95 s with 16 (0.76, 1.23 and 0.81 s in a second run). 16 threads come close, 4 are clearly slower. The partial interval stayed at 0.5 s (p90 at most 0.52 s) with every setting.
+- **Recommended**: Cohere Transcribe as the optional final-stage model (`koeinput model use cohere-transcribe --final`), off by default. It made 213 character errors against 256 (CER 23.2% against 27.8%), but its final p90 is 2.2 s without load and 3.9 s under load, above the 2 s target, and the process needs 4.4 GiB with both models (0.9 GiB with parakeet-ja alone), above the 4 GB target. The user decides whether the accuracy is worth the wait.
+- **Decided**: The filler rule stays as it is. In the outputs it matched only twice, both えっと in free speech, at the start of a phrase. It removed nothing from the read sentences, and no reference contains a filler string.
+- **Decided**: The dictionary gets `koeinput dict add/remove/list`, and the daemon reloads the file at the next session after it changed, so no restart is needed.
+- **Decided**: The addon setting "Partial text" chooses between the app (the default), the fcitx5 panel, and off. A second setting lists apps that always use the panel. This answers the open item about the panel; which apps need the list comes from the host check.
 
 ## License and hosting
 

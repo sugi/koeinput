@@ -49,6 +49,7 @@ scripts/dev cargo clippy --workspace --all-targets -- -D warnings
 - Model tests are opt-in: set `KOEINPUT_MODEL_TESTS=1` and `KOEINPUT_TEST_MODELS_DIR=<dir with installed models>`.
 - The microphone path cannot be tested through `scripts/dev`: the build container has no PulseAudio socket. Test it by hand with `koeinput listen` in the outer dev container (see below).
 - The capture test `records_from_default_source_when_enabled` (`KOEINPUT_AUDIO_TESTS=1`) is not runnable through `scripts/dev`: it needs a real sound server, and other tests set `PULSE_SERVER` for the whole process. Treat it as unsupported until a dedicated runner exists.
+- `tools/measure-m4` measures accuracy and latency on the evaluation recordings in `work/eval-data/`, also under CPU load. It is a developer tool, not packaged. How to run it and the last results: [m4-results.md](m4-results.md).
 
 ## Run the daemon in the dev container
 
@@ -83,6 +84,59 @@ koeinput model install parakeet-ja --from-file <archive>
 ```
 
 Use `--from-file` to install from an archive you already downloaded.
+
+## Final text
+
+The final text comes from one decode of the whole utterance, from the start of the first speech to the end of the recording, when that span is at most `final_full_max_ms` (default 30000, so 30 s).
+Longer recordings join the texts of the VAD segments instead, as the partial text does.
+`final_full_max_ms = 0` in `~/.config/koeinput/config.toml` always joins the segments.
+The measurement behind the default is in [m4-results.md](m4-results.md).
+
+### A second model for the final text
+
+A slower, more accurate model can decode the final text while the default model keeps producing the partial text:
+
+```sh
+koeinput model install cohere-transcribe
+koeinput model use cohere-transcribe --final
+systemctl --user restart koeinput
+koeinput model use --final none     # back to one model
+```
+
+- `model use --final` writes `final_model` into the config file. It installs nothing, and it refuses the main model.
+- The daemon loads the final-stage model after the main model. Dictation works as soon as the main model is loaded; until the second model is loaded too, the main model decodes the final text.
+- The final-stage model decodes only a whole utterance. Over the `final_full_max_ms` limit, the main model's segment texts are joined, because decoding every segment again with the slow model would delay the final text by seconds. With `final_full_max_ms = 0` the daemon does not load it at all.
+- If it fails to load, the daemon logs the error to the journal and works with the main model only.
+- `koeinput status` prints a `final model:` line with `ready`, or `not loaded yet or failed` and a pointer to the journal. `model list` marks it with `final model`.
+
+### D-Bus properties
+
+Interface `org.nemui.KoeInput.Recognizer1` on `/org/nemui/KoeInput` has these read-only properties:
+
+| Property | Type | Meaning |
+|---|---|---|
+| `Ready` | b | The main model is loaded. |
+| `Model` | s | The main model id. |
+| `FinalModel` | s | The configured final-stage model id, empty when none. |
+| `FinalModelReady` | b | The final-stage model is loaded. |
+| `Version` | s | The daemon version. |
+
+`FinalModel` and `FinalModelReady` were added in M4. Older clients ignore them, and `koeinput status` prints no final-model line for an older daemon that lacks them.
+To read them by hand: `busctl --user introspect org.nemui.KoeInput /org/nemui/KoeInput`.
+
+## Dictionary
+
+The dictionary replaces known misrecognitions after recognition, with any model.
+
+```sh
+koeinput dict add ラスト Rust       # add, or replace the entry for ラスト
+koeinput dict remove ラスト
+koeinput dict list                  # wrong<TAB>right per line
+```
+
+- The file is `~/.config/koeinput/dictionary.tsv` (or the `dictionary` path in the config), one `wrong<TAB>right` per line. `dict add` and `dict remove` keep comments, blank lines and the order of entries, and write through a temporary file and a rename.
+- `dict add` refuses an empty right form. An entry that deletes a word (empty right form) is made by editing the file by hand.
+- The daemon reads the file again at the start of the next session after its modification time or size changed; no restart is needed. A file over 1 MiB is not reloaded. `koeinput transcribe` reads it at start.
 
 ## Disk use
 

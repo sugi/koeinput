@@ -16,7 +16,9 @@ Decisions themselves live in [decisions.md](decisions.md).
 | [superpowers/plans/2026-10-17-m1-daemon-cli.md](superpowers/plans/2026-10-17-m1-daemon-cli.md) | M1 implementation plan (executed) |
 | [superpowers/specs/2026-10-18-m2-addon-design.md](superpowers/specs/2026-10-18-m2-addon-design.md) | M2 spec (fcitx5 addon) |
 | [superpowers/specs/2026-10-18-m3-debian-packaging-design.md](superpowers/specs/2026-10-18-m3-debian-packaging-design.md) | M3 spec (Debian packaging) |
+| [superpowers/specs/2026-10-18-m4-quality-design.md](superpowers/specs/2026-10-18-m4-quality-design.md) | M4 spec (quality) |
 | [spike-results.md](spike-results.md) | Model comparison on the user's own recordings (M0) |
+| [m4-results.md](m4-results.md) | Measurement of the M4 changes and of latency under CPU load |
 | [development.md](development.md) | How to build, test, package and run, and how to install on the host |
 | [followups.md](followups.md) | Review findings deliberately left for later milestones |
 
@@ -27,8 +29,8 @@ Decisions themselves live in [decisions.md](decisions.md).
 | M0. Model spike | Done. Default model: parakeet-ja (int8, sherpa-onnx). |
 | M1. Daemon and CLI | Implemented and merged into `main` (merge commit `dc1a3bf`). One check left, see below. |
 | M2. Minimal fcitx5 addon | Merged into `main` (merge commit `fe20500`). Tests pass in the Debian 13 and Debian 12 images. The host check is pending; it uses the M3 packages. |
-| M3. Debian packaging | Done on branch `m3-packaging` (merge pending). The packages build, pass lintian and pass the install test for Debian 13 and Debian testing. The host install and the host check are pending for the user, see below. |
-| M4. Quality | Not started. |
+| M3. Debian packaging | Merged into `main` (merge commit `68abc8e`). The packages build, pass lintian and pass the install test for Debian 13 and Debian testing. The host install and the host check are pending for the user, see below. |
+| M4. Quality | Implemented on branch `m4-quality`; the final review and the merge are pending. The defaults are measured on the user's recordings. See below. |
 | M5. RPM, PKGBUILD, CI, release | Not started. |
 
 ### Left over from M1
@@ -50,6 +52,18 @@ The packages are ready; installing them needs root on the host, so the user does
 1. Build and test: `scripts/build-deb testing` and `scripts/test-deb testing` in the dev container.
 2. Install on the host, install the model, restart fcitx5: the steps, rollback and logs are in [development.md](development.md#install-on-the-host).
 3. Go through the [host check](development.md#host-check) in WezTerm, Chrome, Firefox, Emacs and Discord. The notes feed M4.
+
+## M4: Quality
+
+Spec: [M4 spec](superpowers/specs/2026-10-18-m4-quality-design.md). Decisions are in [decisions.md](decisions.md#quality-m4), numbers in [m4-results.md](m4-results.md).
+
+- The final text comes from one decode of the whole utterance (up to `final_full_max_ms`, 30 s). On the user's recordings this removed the `。` at pause points, kept the CER (27.8% against 27.7%) and kept the final p90 under 1 s, also under build load.
+- An optional final-stage model: `koeinput model use cohere-transcribe --final`. It is more accurate (CER 23.2%) but slower (final p90 2.2 s, 3.9 s under load) and needs 4.4 GiB, so it stays off by default; the user decides.
+- `koeinput dict add/remove/list`; the daemon reloads the dictionary at the next session.
+- The addon's "Partial text" setting (in the app, in the panel, off) and a list of apps that always use the panel. Key releases pair with their presses by keycode.
+- `threads` stays at 8: the fastest with and without load.
+- Follow-ups closed or kept with reasons in [followups.md](followups.md). The host check still decides which apps need the panel list.
+- `tools/measure-m4` repeats the measurement (see [m4-results.md](m4-results.md#how-to-run-it-again)).
 
 ## M3: Debian packaging
 
@@ -111,8 +125,8 @@ Facts already checked for M2 (2026-10-17):
 | `work/eval-data/` | The user's own recordings and references (`references.jsonl`, `audio/`, `rejected/`, `extra/`). Never commit; never quote transcripts in docs. |
 | `work/models/` | Spike models (13 GB) and their original archives in `_dl/` |
 | `work/models-test/` | Relative symlinks `parakeet-ja` and `silero-vad` for opt-in model tests (`KOEINPUT_MODEL_TESTS=1 KOEINPUT_TEST_MODELS_DIR=/src/work/models-test`) |
-| `work/home/` | A `HOME` with parakeet-ja and silero-vad installed through `koeinput model install`; used to run the daemon by hand |
-| `work/spike/`, `work/tools/`, `work/results/` | Throwaway spike harness (`run.py`, `score.py`, `transcribe.py`), the recorder and reference tools, benchmark results (`real1/summary.md`) |
+| `work/home/` | A `HOME` with parakeet-ja, silero-vad and cohere-transcribe installed through `koeinput model install`; used to run the daemon by hand and by `tools/measure-m4` |
+| `work/spike/`, `work/tools/`, `work/results/` | Throwaway spike harness (`run.py`, `score.py`, `transcribe.py`), the recorder and reference tools, benchmark results (`real1/summary.md`, and `m4/` from `tools/measure-m4`) |
 | `work/cache/` | Cargo registry and git caches for the build container |
 
 ### Running the daemon and dictating by hand
