@@ -2,14 +2,16 @@ mod service;
 
 use anyhow::Context;
 use futures_util::StreamExt;
-use koeinput_core::build::{BuildError, dictionary_path, load_final, load_main};
+use koeinput_core::build::{
+    BuildError, dictionary_path, load_final, load_main, main_model_installed,
+};
 use koeinput_core::config::{Config, Paths, load};
 use koeinput_core::engine::Engine;
 use koeinput_core::models::DEFAULT_MODEL_ID;
 use koeinput_core::postprocess::DictionaryWatch;
 use koeinput_core::recognizer::Recognizer;
 use koeinput_dbus_api::{BUS_NAME, OBJECT_PATH};
-use service::{Readiness, Recognizer1, Shared};
+use service::{Readiness, Recognizer1, Reloader, Shared};
 use std::sync::{Arc, Mutex};
 use zbus::object_server::InterfaceRef;
 
@@ -44,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
         load_finished: tokio::sync::watch::channel(false).0,
         dictionary,
     }));
+    let reloader = Arc::new(std::sync::OnceLock::new());
     // zbus would otherwise let a second daemon take the name from a running one.
     let conn = zbus::connection::Builder::session()
         .allow_name_replacements(false)
@@ -53,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
             OBJECT_PATH,
             Recognizer1 {
                 shared: shared.clone(),
+                reloader: reloader.clone(),
             },
         )
         .build()
@@ -66,6 +70,25 @@ async fn main() -> anyhow::Result<()> {
         .object_server()
         .interface::<_, Recognizer1>(OBJECT_PATH)
         .await?;
+    let _ = reloader.set(Reloader {
+        installed: Box::new({
+            let (paths, cfg) = (paths.clone(), cfg.clone());
+            move || installed_now(&paths, &cfg, test_fake)
+        }),
+        spawn: Box::new({
+            let (paths, cfg, shared, iface) =
+                (paths.clone(), cfg.clone(), shared.clone(), iface.clone());
+            move || {
+                tokio::spawn(load_model(
+                    paths.clone(),
+                    cfg.clone(),
+                    test_fake,
+                    shared.clone(),
+                    iface.clone(),
+                ));
+            }
+        }),
+    });
     tokio::spawn(load_model(paths, cfg, test_fake, shared.clone(), iface));
 
     while let Some(sig) = changes.next().await {
@@ -106,6 +129,11 @@ async fn load_model(
     let r = tokio::task::spawn_blocking(move || load_for(&p, &c, test_fake)).await;
     let (ready, main_id) = {
         let mut s = shared.lock().unwrap();
+        // Shutdown replaces Loading with its own mark, which a late result must not overwrite.
+        if !matches!(s.readiness, Readiness::Loading) {
+            s.load_finished.send_replace(true);
+            return;
+        }
         match r {
             Ok(Ok((engine, id))) => {
                 s.model = id;
@@ -114,7 +142,7 @@ async fn load_model(
             }
             Ok(Err(BuildError::NoModel { hint, .. })) => {
                 tracing::warn!("no model installed; run `{hint}`");
-                s.readiness = Readiness::Missing(format!("no model installed; run `{hint}`"));
+                s.readiness = Readiness::NoModel(format!("no model installed; run `{hint}`"));
             }
             Ok(Err(e)) => {
                 tracing::error!("{e}");
@@ -190,10 +218,19 @@ async fn load_model(
     }
 }
 
+fn installed_now(paths: &Paths, cfg: &Config, test_fake: bool) -> bool {
+    #[cfg(feature = "test-hooks")]
+    if test_fake {
+        return !service::test_no_model();
+    }
+    let _ = test_fake;
+    main_model_installed(paths, cfg)
+}
+
 fn load_for(paths: &Paths, cfg: &Config, test_fake: bool) -> Result<(Engine, String), BuildError> {
     #[cfg(feature = "test-hooks")]
     if test_fake {
-        if std::env::var("KOEINPUT_TEST_NO_MODEL").as_deref() == Ok("1") {
+        if service::test_no_model() {
             return Err(BuildError::NoModel {
                 id: "parakeet-ja".into(),
                 hint: "koeinput model install parakeet-ja".into(),

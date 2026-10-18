@@ -593,3 +593,136 @@ async fn dictionary_reload_between_sessions() {
     let (_, text) = dictate(&p).await;
     assert!(text.chars().all(|c| c.is_ascii_digit()), "{text}");
 }
+
+fn log_count(d: &Daemon, needle: &str) -> usize {
+    std::fs::read_to_string(d.dir.join("stderr.log"))
+        .unwrap_or_default()
+        .matches(needle)
+        .count()
+}
+
+/// The fake loader reports "no model" while this file is missing.
+fn installed_marker() -> PathBuf {
+    let marker = gate_path();
+    let _ = std::fs::remove_file(&marker);
+    marker
+}
+
+async fn start_error(p: &Recognizer1Proxy<'_>) -> String {
+    p.start(HashMap::new()).await.unwrap_err().to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn model_installed_after_start_loads_at_the_next_start() {
+    let marker = installed_marker();
+    let (d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    let msg = start_error(&p).await;
+    assert!(msg.contains("koeinput model install"), "{msg}");
+    assert!(!p.ready().await.unwrap());
+    // A Start while the model is still missing must not start a load.
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    assert_eq!(log_count(&d, "the model is installed now"), 0);
+
+    let mut ready = p.receive_ready_changed().await;
+    open_gate(&marker);
+    let id = p.start(HashMap::new()).await.unwrap();
+    let changed = timeout(Duration::from_secs(3), ready.next())
+        .await
+        .expect("no PropertiesChanged for Ready")
+        .unwrap();
+    assert!(changed.get().await.unwrap());
+    assert!(p.ready().await.unwrap());
+    assert_eq!(p.model().await.unwrap(), "fake");
+    p.cancel(id).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_starts_share_one_reload() {
+    let marker = installed_marker();
+    let gate = gate_path();
+    let (d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+        ("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap()),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    open_gate(&marker);
+    let starts: Vec<_> = (0..2)
+        .map(|_| {
+            let p = p.clone();
+            tokio::spawn(async move { p.start(HashMap::new()).await })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        starts.iter().all(|s| !s.is_finished()),
+        "Start did not wait for the reload"
+    );
+    open_gate(&gate);
+    let mut ok = 0;
+    for s in starts {
+        match timeout(Duration::from_secs(3), s).await.unwrap().unwrap() {
+            Ok(id) => {
+                ok += 1;
+                p.cancel(id).await.unwrap();
+            }
+            Err(e) => {
+                let e = e.to_string();
+                assert!(e.contains("Busy") && !e.contains("NoModel"), "{e}");
+            }
+        }
+    }
+    assert_eq!(ok, 1);
+    assert_eq!(log_count(&d, "model loaded model=fake"), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_waits_four_seconds_then_reports_still_loading() {
+    let marker = installed_marker();
+    let gate = gate_path();
+    let (_d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+        ("KOEINPUT_TEST_LOAD_GATE", gate.to_str().unwrap()),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    open_gate(&marker);
+    let t = std::time::Instant::now();
+    let msg = start_error(&p).await;
+    assert!(msg.contains("still loading"), "{msg}");
+    assert!(
+        t.elapsed() >= Duration::from_millis(3500),
+        "{:?}",
+        t.elapsed()
+    );
+    open_gate(&gate);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_load_error_is_not_retried() {
+    let marker = installed_marker();
+    let (d, conn) = start_daemon(&[
+        ("KOEINPUT_TEST_NO_MODEL", "1"),
+        ("KOEINPUT_TEST_NO_MODEL_FILE", marker.to_str().unwrap()),
+        ("KOEINPUT_TEST_LOAD_PANIC", "1"),
+    ])
+    .await;
+    let p = Recognizer1Proxy::new(&conn).await.unwrap();
+    assert!(start_error(&p).await.contains("koeinput model install"));
+    open_gate(&marker);
+    let msg = start_error(&p).await;
+    assert!(msg.contains("model loading failed"), "{msg}");
+    for _ in 0..3 {
+        assert!(start_error(&p).await.contains("model loading failed"));
+    }
+    assert_eq!(log_count(&d, "model loading failed"), 1);
+}

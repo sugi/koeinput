@@ -90,7 +90,9 @@ pub fn install(paths: &Paths, id: &str, from_file: Option<&Path>) -> Result<()> 
         }
     }
     install_one(paths, m, from_file)?;
-    println!("if the daemon is already running, restart it to load the model (systemctl --user restart koeinput)");
+    println!(
+        "the daemon loads it at the next dictation; if it does not, restart it (systemctl --user restart koeinput)"
+    );
     Ok(())
 }
 
