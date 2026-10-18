@@ -49,6 +49,9 @@ debian/sherpa-lib/stamp:
 
 # The workspace needs Rust 1.89 (rust-version in Cargo.toml). Stop before the long
 # build, with a message that names the fix.
+# debhelper passes its default CMake variables, many of which the addon does not
+# use (CMAKE_INSTALL_LIBDIR, FETCHCONTENT_FULLY_DISCONNECTED and others); without
+# --no-warn-unused-cli, CMake warns about each of them.
 override_dh_auto_configure: debian/cargo-home/config.toml debian/sherpa-lib/stamp
 	@v=$$(rustc --version 2>/dev/null | cut -d' ' -f2); \
 	echo "rustc $${v:-not found} ($$(command -v rustc))"; \
@@ -56,7 +59,7 @@ override_dh_auto_configure: debian/cargo-home/config.toml debian/sherpa-lib/stam
 	  echo "debian/rules: KoeInput needs Rust 1.89 or newer, but rustc is $${v:-not found}." >&2; \
 	  echo "debian/rules: on Ubuntu 24.04, install rustc-1.91 and cargo-1.91." >&2; \
 	  exit 1; }
-	dh_auto_configure
+	dh_auto_configure -- --no-warn-unused-cli
 
 override_dh_auto_build:
 	dh_auto_build

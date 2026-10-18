@@ -159,7 +159,10 @@ cargo build %{cargo_flags} --bins
 scripts/check-no-gpl target/release/koeinput target/release/koeinput-daemon
 target/release/koeinput manpage >koeinput.1
 
-%cmake
+# %%cmake passes Fedora's default variables, many of which the addon does not use
+# (CMAKE_INSTALL_DO_STRIP, LIB_INSTALL_DIR and others); without this, CMake warns
+# about each of them.
+%cmake --no-warn-unused-cli
 %cmake_build
 
 %install
