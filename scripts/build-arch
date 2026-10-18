@@ -2,8 +2,8 @@
 # Builds the Arch Linux packages with makepkg and checks them with namcap.
 # The build runs in a podman container without network, from the orig tarballs in
 # target/deb/ (made by scripts/make-orig when missing), debian/copyright and
-# packaging/arch/PKGBUILD of the work tree. The packages, the PKGBUILD with the filled-in checksums, the
-# build log and the namcap output go to target/arch/.
+# packaging/arch/PKGBUILD of the work tree. The packages, the PKGBUILD with the
+# filled-in checksums, the build log and the namcap output go to target/arch/.
 # Usage: scripts/build-arch
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
