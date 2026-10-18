@@ -304,13 +304,32 @@ const MAX_RELOAD_BYTES: u64 = 1 << 20;
 pub struct DictionaryWatch {
     path: std::path::PathBuf,
     seen: Stamp,
+    /// The stamp of an oversized file already warned about.
+    rejected: Stamp,
 }
 
 impl DictionaryWatch {
     /// Call before the first load, so a change during that load is not missed.
     pub fn new(path: std::path::PathBuf) -> Self {
         let seen = stamp(&path);
-        Self { path, seen }
+        Self {
+            path,
+            seen,
+            rejected: None,
+        }
+    }
+
+    /// Warns once per file stamp; returns whether it warned.
+    fn warn_oversized(&mut self, now: Stamp) -> bool {
+        if self.rejected == now {
+            return false;
+        }
+        self.rejected = now;
+        tracing::warn!(
+            "{} is larger than 1 MiB; keeping the previous dictionary",
+            self.path.display()
+        );
+        true
     }
 
     /// A new post-processor when the file differs from the last one seen; a missing file gives an empty one.
@@ -323,10 +342,7 @@ impl DictionaryWatch {
         if let Some((_, len)) = now
             && len > MAX_RELOAD_BYTES
         {
-            tracing::warn!(
-                "{} is larger than 1 MiB; keeping the previous dictionary",
-                self.path.display()
-            );
+            self.warn_oversized(now);
             return None;
         }
         match load_dictionary(&self.path) {
@@ -560,5 +576,20 @@ mod tests {
         assert!(w.reload().is_none());
         std::fs::write(&p, "a\tsmall\n").unwrap();
         assert_eq!(w.reload().expect("shrunk").apply("a"), "small");
+    }
+
+    #[test]
+    fn watch_warns_about_a_large_file_once_per_stamp() {
+        let (_d, p) = dict_file("a\tb\n");
+        let mut w = DictionaryWatch::new(p.clone());
+        let mut big = String::from("a\tbig\n");
+        big.push_str(&"#".repeat((MAX_RELOAD_BYTES as usize) + 1));
+        std::fs::write(&p, &big).unwrap();
+        let now = stamp(&p);
+        assert!(w.warn_oversized(now));
+        assert!(!w.warn_oversized(now));
+        big.push('#');
+        std::fs::write(&p, &big).unwrap();
+        assert!(w.warn_oversized(stamp(&p)));
     }
 }

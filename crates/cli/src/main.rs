@@ -100,7 +100,7 @@ fn main() -> std::process::ExitCode {
     let paths = koeinput_core::config::Paths::from_env();
     let result = match cli.cmd {
         Cmd::Listen => listen::run(),
-        Cmd::Status => listen::status(),
+        Cmd::Status => listen::status(&paths),
         Cmd::Transcribe { partials, files } => transcribe::run(&paths, partials, &files),
         Cmd::Dict { cmd } => match cmd {
             DictCmd::Add { wrong, right } => dict_cmd::add(&paths, &wrong, &right),

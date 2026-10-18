@@ -184,7 +184,7 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput. 
 - tap mode: a short press keeps recording until the next press;
 - the tap threshold in milliseconds;
 - partial text: where the text you are still speaking appears. "In the app" (the default) puts it into the app's text field as underlined preedit, or into the fcitx5 panel when the app has no preedit. "In the panel" always uses the panel. "Off" shows only the status;
-- apps that show partial text in the panel: program names that use the panel whatever the partial text setting says. Case does not matter; spaces around a name are ignored. Use it for apps that commit their own composition on blur, such as text-input-v3 clients (Chrome, Discord). To find the name fcitx5 uses for an app, focus a text field in the app and run `fcitx5-diagnose`: the "Input Context" list in its output names the program of each context (the same list comes from `dbus-send --session --print-reply --dest=org.fcitx.Fcitx5 /controller org.fcitx.Fcitx.Controller1.DebugInfo`). Apps without a program name follow the main setting.
+- apps that show partial text in the panel: program names that use the panel whatever the partial text setting says. Case does not matter; spaces around a name are ignored. Use it for apps that commit their own composition on blur, such as text-input-v3 clients (Chrome, Discord). To find the name fcitx5 uses for an app, focus a text field in the app and run `fcitx5-diagnose`: the "Input Context" list in its output names the program of each context (the same list comes from `dbus-send --session --print-reply --dest=org.fcitx.Fcitx5 /controller org.fcitx.Fcitx.Controller1.DebugInfo`). Apps without a program name follow the main setting. The per-app list works only when fcitx5 knows the app's name; some fcitx5 versions under KDE Wayland do not report it, and then the app follows the main setting, so use the main "In the panel" setting if the list has no effect.
 
 Configs from before the "Partial text" setting have the boolean `ShowPartial`. The addon reads `ShowPartial=False` as "Off"; the next save from the settings writes `PartialText=Off`.
 
@@ -316,7 +316,7 @@ Then, in a terminal on the host, in the repository directory (`~/works/git/nemui
 
    The VAD model is downloaded with it. To download both, run `koeinput model install parakeet-ja` instead.
 
-   If the daemon was already running when you installed the model, run `systemctl --user restart koeinput`. The daemon looks for the model only when it starts.
+   If the daemon was already running without a model, it loads the model you installed at the next dictation. Restart it (`systemctl --user restart koeinput`) only if `koeinput status` still says `ready: no` after one try. Changing the model with `koeinput model use` still needs a restart, because the reload uses the model that was configured when the daemon started.
 4. Restart fcitx5 so that it loads the addon. Open System Settings, then Keyboard, then Virtual Keyboard (Plasma 6; on Plasma 5 it is Input Devices, then Virtual Keyboard). Choose None and apply, then choose Fcitx 5 and apply again. The keyboard keeps typing while fcitx5 is down.
 5. The addon starts the daemon. Check it:
 
@@ -324,13 +324,20 @@ Then, in a terminal on the host, in the repository directory (`~/works/git/nemui
    koeinput status
    ```
 
-   It prints `ready: yes` and `model: parakeet-ja`. The model takes a few seconds to load; until then it prints `ready: no`. If it keeps printing `ready: no` together with the install hint, the model step was skipped (or the daemon needs the restart from step 3).
+   It prints `ready: yes` and `model: parakeet-ja`. The model takes a few seconds to load; until then it prints `ready: no`. If it keeps printing `ready: no` together with the install hint, the model step was skipped.
 
 Then go through the [host check](#host-check).
 
 ### Upgrade
 
-Nothing restarts by itself after an upgrade. Install the new packages the same way as in step 2, then:
+Nothing restarts by itself after an upgrade. Install the new packages the same way as in step 2. Unreleased builds keep the same version, and apt reports "already the newest version" and installs nothing for the same version, so add `--reinstall`:
+
+```sh
+sudo apt install --reinstall ./target/deb/testing/koeinput_0.1.0-1_amd64.deb ./target/deb/testing/fcitx5-koeinput_0.1.0-1_amd64.deb
+systemctl --user restart koeinput
+```
+
+For a released version with a new number, the command is the same without `--reinstall`:
 
 ```sh
 sudo apt install ./target/deb/testing/koeinput_<version>_amd64.deb ./target/deb/testing/fcitx5-koeinput_<version>_amd64.deb
@@ -345,6 +352,8 @@ Restart fcitx5 as in step 4 when fcitx5-koeinput changed. The running daemon and
 systemctl --user stop koeinput
 sudo apt remove fcitx5-koeinput koeinput
 ```
+
+If you install an older build by hand, first remove `final_model` and `final_full_max_ms` from `~/.config/koeinput/config.toml`, because older builds refuse unknown settings.
 
 Then restart fcitx5 as in step 4. Keys still type while fcitx5 is down, so a broken addon never locks you out of a terminal.
 

@@ -255,7 +255,8 @@ void KoeInputAddon::handleKeyByCode(fcitx::KeyEvent &event, int code) {
             record.pressMs = now;
             bool swallow = record.swallowed;
             if (record.role == Role::Hotkey) {
-                swallow = controller_.hotkeyPress(now, eligible(event.inputContext()), isModifierKey(key), true);
+                // Eligibility is not read for a repeat.
+                swallow = controller_.hotkeyPress(now, false, isModifierKey(key), true);
             }
             if (swallow) event.filterAndAccept();
             return;
