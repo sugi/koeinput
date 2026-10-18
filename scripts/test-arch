@@ -1,0 +1,90 @@
+#!/bin/sh
+# Installs the packages from target/arch/ in a fresh archlinux container and runs
+# the install test of scripts/lib/install-checks.sh: the installed files, the
+# koeinput command and man page, D-Bus activation of the daemon, loading the addon
+# in a headless fcitx5, then removal and a second install; also the versions that
+# pacman shows and the license files of the crates. pacman needs the network for
+# the dependencies. The output also goes to target/arch/test.log.
+# Usage: scripts/test-arch
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+die() {
+  echo "scripts/test-arch: $*" >&2
+  exit 1
+}
+if [ $# -ne 0 ]; then
+  echo "usage: scripts/test-arch" >&2
+  exit 2
+fi
+
+upstream=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+pkgrel=$(sed -n 's/^pkgrel=//p' packaging/arch/PKGBUILD)
+[ -n "$upstream" ] && [ -n "$pkgrel" ] || die "cannot read pkgver and pkgrel from packaging/arch/PKGBUILD"
+version=$upstream-$pkgrel
+out=target/arch
+for pkg in koeinput fcitx5-koeinput; do
+  [ -e "$out/$pkg-$version-x86_64.pkg.tar.zst" ] ||
+    die "$out/$pkg-$version-x86_64.pkg.tar.zst is missing; run scripts/build-arch first"
+done
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# What differs from the other formats; scripts/lib/install-checks.sh lists the names.
+cat >"$tmp/format.sh" <<'EOF'
+PKGS="/pkgs/koeinput-$VERSION-x86_64.pkg.tar.zst /pkgs/fcitx5-koeinput-$VERSION-x86_64.pkg.tar.zst"
+# Arch has no /usr/libexec, so the PKGBUILD changes the path in the D-Bus service
+# file and the user unit.
+DAEMON=/usr/lib/koeinput/koeinput-daemon
+ADDON_DIR=/usr/lib/fcitx5
+COPYRIGHT=/usr/share/licenses/koeinput/copyright
+NOTICES=/usr/share/licenses/koeinput/sherpa-onnx/onnxruntime-*-ThirdPartyNotices.txt
+KOEINPUT_DOC_FILES="/usr/share/licenses/koeinput/LICENSE-MIT /usr/share/licenses/koeinput/LICENSE-APACHE
+  /usr/share/licenses/koeinput/sherpa-onnx/onnxruntime-1.28.2-ThirdPartyNotices.txt
+  /usr/share/doc/koeinput/README.md /usr/share/doc/koeinput/README.ja.md /usr/share/doc/koeinput/models.md"
+ADDON_DOC_FILES="/usr/share/licenses/fcitx5-koeinput/LICENSE-MIT /usr/share/licenses/fcitx5-koeinput/LICENSE-APACHE"
+REMOVED="/usr/share/licenses/koeinput /usr/share/licenses/fcitx5-koeinput /usr/share/doc/koeinput"
+REMOVE_LABEL="pacman -R"
+TIMEOUT=1800
+
+first_install() {
+  pacman -Syu --noconfirm
+  # The archlinux image leaves out man pages and translations (NoExtract in
+  # pacman.conf); the test checks both.
+  sed -i '/^NoExtract/d' /etc/pacman.conf
+  install_packages
+}
+install_packages() { pacman -U --noconfirm $PKGS; }
+install_tools() { pacman -S --noconfirm --needed man-db; }
+show_versions() { pacman -Q koeinput fcitx5-koeinput fcitx5 dbus; }
+owner() { pacman -Qqo "$1"; }
+# The license files of the crates are counted below instead of listed.
+list_files() { pacman -Qlq koeinput fcitx5-koeinput | grep -v '/licenses/koeinput/crates/'; }
+remove_packages() { pacman -R --noconfirm fcitx5-koeinput koeinput; }
+is_installed() { pacman -Q "$1" >/dev/null 2>&1; }
+check_package_extra() {
+  [ "$(pacman -Q koeinput fcitx5-koeinput)" = "koeinput $VERSION
+fcitx5-koeinput $VERSION" ] || fail "pacman -Q shows $(pacman -Q koeinput fcitx5-koeinput)"
+}
+check_files_extra() {
+  ! pacman -Qlq koeinput | grep -q '^/usr/libexec/' || fail "koeinput installs files in /usr/libexec/"
+  crates=$(pacman -Qlq koeinput | grep -c '^/usr/share/licenses/koeinput/crates/.*[^/]$' || true)
+  echo "  /usr/share/licenses/koeinput/crates/: $crates files"
+  [ "$crates" -gt 0 ] || fail "no license files of the crates in /usr/share/licenses/koeinput/crates/"
+}
+EOF
+
+# podman run --init would need catatonit on the host, so the test runs its own PID 1.
+{
+  nice -n 10 podman run --rm \
+    -v "$root/$out:/pkgs:ro" -v "$root/scripts/lib/install-checks.sh:/test/checks.sh:ro" \
+    -v "$tmp/format.sh:/test/format.sh:ro" \
+    -e VERSION="$version" -e UPSTREAM="$upstream" \
+    docker.io/library/archlinux:latest sh /test/checks.sh pid1 || echo $? >"$tmp/failed"
+} 2>&1 | tee "$out/test.log"
+if [ -e "$tmp/failed" ]; then
+  die "the install test failed; see $out/test.log"
+fi

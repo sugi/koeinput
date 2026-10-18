@@ -1,0 +1,31 @@
+#!/bin/sh
+# Fails when the crate directories in the vendor orig tarball and the
+# Files: vendor/<crate>/* paragraphs of debian/copyright differ: every vendored
+# crate needs its own paragraph, and every paragraph a crate. scripts/build-deb,
+# scripts/build-rpm and scripts/build-arch run it, because all three packages
+# ship debian/copyright.
+# Usage: scripts/check-vendor-copyright VENDOR_TARBALL
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+
+die() {
+  echo "scripts/check-vendor-copyright: $*" >&2
+  exit 1
+}
+[ $# -eq 1 ] || {
+  echo "usage: scripts/check-vendor-copyright VENDOR_TARBALL" >&2
+  exit 2
+}
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+tar -tf "$1" >"$tmp/list" || die "cannot list $1"
+sed -n 's|^vendor/\([^/]*\)/.*|\1|p' "$tmp/list" | sort -u >"$tmp/vendored"
+[ -s "$tmp/vendored" ] || die "$1 has no crate directories under vendor/"
+sed -n 's|^Files: vendor/\([^/]*\)/\*$|\1|p' "$root/debian/copyright" | sort >"$tmp/listed"
+if ! cmp -s "$tmp/vendored" "$tmp/listed"; then
+  diff "$tmp/vendored" "$tmp/listed" >&2 || true
+  die "the crates in $1 (<) and the Files: vendor/ paragraphs of debian/copyright (>) differ"
+fi
+echo "debian/copyright has a paragraph for each of the $(wc -l <"$tmp/vendored") vendored crates"

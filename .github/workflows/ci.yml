@@ -1,0 +1,160 @@
+# The checks of docs/development.md, run through the repository's scripts in the
+# same podman images as on a development machine.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Builds each dev image once when its Containerfile changed and saves it in the
+  # cache; the other jobs load it from there.
+  images:
+    name: Image (${{ matrix.containerfile }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        containerfile: [dev-trixie, dev-bookworm]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: image
+        uses: ./.github/actions/podman-image
+        with:
+          containerfile: ${{ matrix.containerfile }}
+          load: 'false'
+      - name: Build the image
+        if: steps.image.outputs.hit != 'true'
+        env:
+          CONTAINERFILE: ${{ matrix.containerfile }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          IMAGE_TAR: ${{ steps.image.outputs.path }}
+        run: |
+          set -euo pipefail
+          # scripts/dev builds its image when the tag is missing, then runs the command.
+          KOEINPUT_DEV_IMAGE=${CONTAINERFILE#dev-} KOEINPUT_DEV_NO_SHERPA=1 scripts/dev true
+          mkdir -p "$(dirname "$IMAGE_TAR")"
+          podman save -o "$IMAGE_TAR" "$IMAGE"
+      - if: steps.image.outputs.hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.image.outputs.path }}
+          key: ${{ steps.image.outputs.key }}
+
+  rust:
+    name: Rust
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/podman-image
+        with:
+          containerfile: dev-trixie
+      - id: cache
+        uses: ./.github/actions/work-cache
+      - name: cargo fmt
+        run: scripts/dev cargo fmt --all --check
+      - name: cargo clippy
+        run: scripts/dev cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo test
+        run: scripts/dev cargo test --workspace
+      - name: D-Bus tests
+        run: scripts/dev dbus-run-session -- cargo test -p koeinput-daemon --features test-hooks
+      - name: debian/copyright is up to date
+        run: scripts/gen-copyright --check
+      # cargo updates a stale Cargo.lock without --locked; the packages build from
+      # the committed one.
+      - name: The checks changed no tracked file
+        run: git diff --exit-code
+      - if: steps.cache.outputs.hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.cache.outputs.paths }}
+          key: ${{ steps.cache.outputs.key }}
+      - name: Disk use
+        if: always()
+        run: |
+          df -h /
+          du -sh target work || true
+          podman system df || true
+
+  # A job of its own: the release build shares no compiled code with the dev
+  # builds of the rust job, so it runs in parallel instead of after them.
+  gpl:
+    name: No GPL code in a release build
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/podman-image
+        with:
+          containerfile: dev-trixie
+      - uses: ./.github/actions/work-cache
+      - name: cargo build --release
+        run: scripts/dev cargo build --release --workspace
+      - name: scripts/check-no-gpl
+        run: scripts/dev scripts/check-no-gpl target/release/koeinput target/release/koeinput-daemon
+
+  msrv:
+    name: Rust version in Cargo.toml
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/podman-image
+        with:
+          containerfile: dev-trixie
+      - uses: ./.github/actions/work-cache
+      - name: cargo check with the rust-version toolchain
+        run: |
+          set -euo pipefail
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          [ -n "$msrv" ] || { echo "Cargo.toml has no rust-version" >&2; exit 1; }
+          # The dev image has rustup; the toolchain lasts as long as the container.
+          scripts/dev sh -c "rustup toolchain install $msrv --profile minimal && cargo +$msrv check --workspace --all-targets"
+
+  addon:
+    name: fcitx5 addon
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/podman-image
+        with:
+          containerfile: dev-trixie
+      - uses: ./.github/actions/podman-image
+        with:
+          containerfile: dev-bookworm
+      - uses: ./.github/actions/work-cache
+      - name: Addon tests on Debian 13
+        run: scripts/addon test
+      - name: Addon tests on Debian 12
+        env:
+          KOEINPUT_DEV_IMAGE: bookworm
+        run: scripts/addon test

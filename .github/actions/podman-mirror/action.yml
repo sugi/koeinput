@@ -1,0 +1,21 @@
+name: Docker Hub mirror for podman
+description: >
+  Makes podman pull docker.io images through mirror.gcr.io first. Anonymous pulls
+  from Docker Hub are rate limited per runner address; podman falls back to
+  docker.io when the mirror fails.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        dir=$HOME/.config/containers/registries.conf.d
+        mkdir -p "$dir"
+        cat >"$dir/50-docker-mirror.conf" <<'TOML'
+        [[registry]]
+        location = "docker.io"
+
+        [[registry.mirror]]
+        location = "mirror.gcr.io"
+        TOML

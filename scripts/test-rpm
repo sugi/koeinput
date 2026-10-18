@@ -1,0 +1,91 @@
+#!/bin/sh
+# Installs the packages from target/rpm/<dist>/ in a fresh fedora container and
+# runs the install test of scripts/lib/install-checks.sh: the installed files, the
+# koeinput command and man page, D-Bus activation of the daemon, loading the addon
+# in a headless fcitx5, then removal and a second install; also rpm -V and a check
+# that the packages have no scriptlets. dnf needs the network for the
+# dependencies. The output also goes to target/rpm/<dist>/test.log.
+# Usage: scripts/test-rpm fedora44
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+die() {
+  echo "scripts/test-rpm: $*" >&2
+  exit 1
+}
+case "${1:-}" in
+  fedora44)
+    dist=$1
+    image=docker.io/library/fedora:44
+    disttag=.fc44 ;;
+  *)
+    echo "usage: scripts/test-rpm fedora44" >&2
+    exit 2 ;;
+esac
+
+spec=packaging/rpm/koeinput.spec
+upstream=$(sed -n 's/^Version:[[:space:]]*//p' "$spec")
+release=$(sed -n 's/^Release:[[:space:]]*\([0-9][0-9.]*\)%{?dist}$/\1/p' "$spec")
+[ -n "$upstream" ] && [ -n "$release" ] || die "cannot read Version and Release (N%{?dist}) from $spec"
+version=$upstream-$release$disttag
+out=target/rpm/$dist
+for pkg in koeinput fcitx5-koeinput; do
+  [ -e "$out/$pkg-$version.x86_64.rpm" ] ||
+    die "$out/$pkg-$version.x86_64.rpm is missing; run scripts/build-rpm $dist first"
+done
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# What differs from the other formats; scripts/lib/install-checks.sh lists the names.
+cat >"$tmp/format.sh" <<'EOF'
+PKGS="/pkgs/koeinput-$VERSION.x86_64.rpm /pkgs/fcitx5-koeinput-$VERSION.x86_64.rpm"
+DAEMON=/usr/libexec/koeinput/koeinput-daemon
+ADDON_DIR=/usr/lib64/fcitx5
+COPYRIGHT=/usr/share/licenses/koeinput/copyright
+NOTICES=/usr/share/licenses/koeinput/onnxruntime-*-ThirdPartyNotices.txt
+KOEINPUT_DOC_FILES="/usr/share/licenses/koeinput/LICENSE-MIT /usr/share/licenses/koeinput/LICENSE-APACHE
+  /usr/share/doc/koeinput/README.md /usr/share/doc/koeinput/README.ja.md /usr/share/doc/koeinput/models.md"
+ADDON_DOC_FILES="/usr/share/licenses/fcitx5-koeinput/LICENSE-MIT /usr/share/licenses/fcitx5-koeinput/LICENSE-APACHE
+  /usr/share/doc/fcitx5-koeinput/README.md"
+REMOVED="/usr/share/licenses/koeinput /usr/share/licenses/fcitx5-koeinput
+  /usr/share/doc/koeinput /usr/share/doc/fcitx5-koeinput"
+REMOVE_LABEL="dnf remove"
+DNF="dnf -y -q --setopt=install_weak_deps=False"
+
+prepare_image() {
+  # The Fedora image leaves out documentation (man pages included) and
+  # translations other than en_US; a desktop installs them.
+  sed -i '/^tsflags=nodocs/d' /etc/dnf/dnf.conf
+  rm -f /etc/rpm/macros.image-language-conf
+}
+install_packages() { $DNF install $PKGS; }
+install_tools() { $DNF install man-db dbus-daemon dbus-tools util-linux; }
+show_versions() { rpm -q koeinput fcitx5-koeinput fcitx5 dbus-common dbus-daemon; }
+owner() { rpm -qf --qf '%{NAME}\n' "$1"; }
+list_files() { rpm -ql koeinput fcitx5-koeinput; }
+remove_packages() { $DNF remove koeinput fcitx5-koeinput; }
+is_installed() { rpm -q "$1" >/dev/null; }
+check_package_extra() {
+  rpm -V koeinput fcitx5-koeinput || fail "rpm -V found changed or missing files"
+}
+check_files_extra() {
+  # The user unit is never enabled; D-Bus starts it.
+  [ -z "$(rpm -q --scripts koeinput fcitx5-koeinput)" ] || fail "the packages have scriptlets"
+  ok "no scriptlets"
+}
+EOF
+
+# podman run --init would need catatonit on the host, so the test runs its own PID 1.
+{
+  nice -n 10 podman run --rm \
+    -v "$root/$out:/pkgs:ro" -v "$root/scripts/lib/install-checks.sh:/test/checks.sh:ro" \
+    -v "$tmp/format.sh:/test/format.sh:ro" \
+    -e VERSION="$version" -e UPSTREAM="$upstream" \
+    "$image" sh /test/checks.sh pid1 || echo $? >"$tmp/failed"
+} 2>&1 | tee "$out/test.log"
+if [ -e "$tmp/failed" ]; then
+  die "the install test failed for $dist; see $out/test.log"
+fi

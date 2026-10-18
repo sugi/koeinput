@@ -1,0 +1,228 @@
+# Builds the orig tarballs and, from them, the packages of every target with the
+# repository's scripts, as in docs/release.md. On a v* tag it also creates a draft
+# GitHub release; publishing it stays a manual step.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sources:
+    name: Orig tarballs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # make-orig dates the vendor tarball by the last commit that changed a
+          # manifest; in a shallow clone that would be HEAD.
+          fetch-depth: 0
+          persist-credentials: false
+      # make-orig runs cargo vendor-filterer in the dev image.
+      - uses: ./.github/actions/podman-image
+        with:
+          containerfile: dev-trixie
+      - uses: ./.github/actions/work-cache
+      - name: scripts/make-orig
+        run: scripts/make-orig
+      - name: Check the tarballs against the tag
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(target/deb/koeinput_*.orig*)
+          [ "${#files[@]}" -eq 3 ] || { echo "expected 3 orig tarballs, found ${#files[@]}" >&2; exit 1; }
+          ls -l "${files[@]}"
+          main=(target/deb/koeinput_*.orig.tar.xz)
+          version=${main[0]#target/deb/koeinput_}
+          version=${version%.orig.tar.xz}
+          # The RPM spec downloads its sources from the release of tag v<version>.
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "the tag $GITHUB_REF_NAME does not match the version $version in debian/changelog" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: orig
+          path: target/deb/koeinput_*.orig*
+          if-no-files-found: error
+          compression-level: 0
+          # Artifacts count against the storage quota of the private repository.
+          retention-days: 7
+
+  packages:
+    name: Packages (${{ matrix.target }})
+    needs: sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: trixie
+            build: scripts/build-deb trixie
+            test: scripts/test-deb trixie
+            log: target/deb/trixie/test.log
+            packages: target/deb/trixie/koeinput_*_amd64.deb target/deb/trixie/fcitx5-koeinput_*_amd64.deb
+          - target: testing
+            build: scripts/build-deb testing
+            test: scripts/test-deb testing
+            log: target/deb/testing/test.log
+            packages: target/deb/testing/koeinput_*_amd64.deb target/deb/testing/fcitx5-koeinput_*_amd64.deb
+          - target: noble
+            build: scripts/build-deb noble
+            test: scripts/test-deb noble
+            log: target/deb/noble/test.log
+            packages: target/deb/noble/koeinput_*_amd64.deb target/deb/noble/fcitx5-koeinput_*_amd64.deb
+          - target: resolute
+            build: scripts/build-deb resolute
+            test: scripts/test-deb resolute
+            log: target/deb/resolute/test.log
+            packages: target/deb/resolute/koeinput_*_amd64.deb target/deb/resolute/fcitx5-koeinput_*_amd64.deb
+          - target: fedora44
+            build: scripts/build-rpm fedora44
+            test: scripts/test-rpm fedora44
+            log: target/rpm/fedora44/test.log
+            packages: target/rpm/fedora44/koeinput-[0-9]*.x86_64.rpm target/rpm/fedora44/fcitx5-koeinput-[0-9]*.x86_64.rpm
+          - target: arch
+            build: scripts/build-arch
+            test: scripts/test-arch
+            log: target/arch/test.log
+            packages: target/arch/koeinput-[0-9]*-x86_64.pkg.tar.zst target/arch/fcitx5-koeinput-[0-9]*-x86_64.pkg.tar.zst
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # The images, the build trees and the packages need more room than the
+      # runner's root disk has left; the preinstalled toolchains below are unused.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+      - name: Disk use before the build
+        run: |
+          df -h /
+          podman system df || true
+      # The build scripts run scripts/gen-copyright --check, which runs in the dev image.
+      - uses: ./.github/actions/podman-image
+        with:
+          containerfile: dev-trixie
+      - uses: ./.github/actions/work-cache
+      # The build scripts take tarballs that match HEAD as they are, so every
+      # target builds from the same tarballs.
+      - uses: actions/download-artifact@v8
+        with:
+          name: orig
+          path: target/deb
+      - name: Build
+        run: ${{ matrix.build }}
+      - name: Install test
+        run: ${{ matrix.test }}
+      # The install test passes with a warning when fcitx5 cannot run without a
+      # display, and the addon load is then not checked. A release needs every check.
+      - name: The install test ran every check
+        env:
+          LOG: ${{ matrix.log }}
+        run: |
+          set -euo pipefail
+          if ! grep -qx 'PASSED: all checks' "$LOG"; then
+            sed -n '/^PASSED WITH WARNINGS/,$p' "$LOG" >&2
+            echo "the install test did not run every check; see $LOG" >&2
+            exit 1
+          fi
+      # Only the two packages that users install; not the debug symbol packages.
+      - name: Collect the packages
+        env:
+          PACKAGE_GLOBS: ${{ matrix.packages }}
+          OUT: ${{ runner.temp }}/packages
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p "$OUT"
+          read -ra globs <<<"$PACKAGE_GLOBS"
+          for glob in "${globs[@]}"; do
+            # shellcheck disable=SC2206 # expands the glob
+            matches=($glob)
+            [ "${#matches[@]}" -eq 1 ] || { echo "$glob matches ${#matches[@]} files: ${matches[*]}" >&2; exit 1; }
+            cp -v "${matches[0]}" "$OUT/"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ matrix.target }}
+          path: ${{ runner.temp }}/packages/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Disk use after the build
+        if: always()
+        run: |
+          df -h /
+          podman system df || true
+
+  release:
+    name: Draft release
+    needs: [sources, packages]
+    # Not on a manual dispatch, even from a tag: that run only uploads artifacts.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+      - name: Collect the files and write SHA256SUMS
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          out=$RUNNER_TEMP/release
+          mkdir "$out"
+          orig=(dist/orig/*)
+          [ "${#orig[@]}" -eq 3 ] || { echo "expected 3 orig tarballs, found ${#orig[@]}" >&2; exit 1; }
+          cp "${orig[@]}" "$out/"
+          dirs=(dist/packages-*/)
+          [ "${#dirs[@]}" -gt 0 ] || { echo "no package artifacts" >&2; exit 1; }
+          for dir in "${dirs[@]}"; do
+            target=${dir#dist/packages-}
+            target=${target%/}
+            files=("$dir"*)
+            [ "${#files[@]}" -eq 2 ] || { echo "$dir: expected 2 packages, found ${#files[@]}" >&2; exit 1; }
+            for file in "${files[@]}"; do
+              name=${file##*/}
+              # The Debian testing packages have the same file names as the Debian 13
+              # ones, and release assets need unique names.
+              if [ "$target" = testing ]; then
+                name=${name%.deb}.testing.deb
+              fi
+              [ ! -e "$out/$name" ] || { echo "two targets have a file named $name" >&2; exit 1; }
+              cp "$file" "$out/$name"
+            done
+          done
+          (cd "$out" && sha256sum -- * >"$RUNNER_TEMP/SHA256SUMS")
+          mv "$RUNNER_TEMP/SHA256SUMS" "$out/"
+          cat "$out/SHA256SUMS"
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # GitHub allows several drafts for one tag; a re-run must not add another.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "a release for $GITHUB_REF_NAME exists; delete it to make the draft again" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/* \
+            --draft --verify-tag --title "KoeInput ${GITHUB_REF_NAME#v}" \
+            --notes "Built by the release workflow from the tag $GITHUB_REF_NAME. Check the files and write the release notes before you publish."

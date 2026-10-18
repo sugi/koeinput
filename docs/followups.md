@@ -17,6 +17,9 @@ Kept with a reason:
 
 - The main orig tarball is `git archive` of HEAD, so it changes with every commit. That is fine until the first release. After it, every new build, even a change in `debian/` alone, needs a new upstream version, unless the tarball is made from the release tag.
 - Some vendored crates contain tests or examples taken from other projects, which are only in the source package and not in the binaries: crossbeam-channel's tests from Go (BSD-3-Clause) and its example under CC-BY-3.0, and ring's test data from BoringSSL and other test suites. `debian/copyright` has paragraphs for the crossbeam-channel files and lists ring's holders, but the vendor tree was not checked file by file. An upload to Debian would need that check, or would leave such files out with `Files-Excluded`.
+- CI runs on every branch push and on pull requests, so a pull request from a branch of this repository runs twice. Drop one trigger if the Actions minutes of the private repository run short.
+- `debian/control` lists `cargo (>= 1.89) | cargo-1.91`. sbuild and Launchpad use only the first alternative, so a Ubuntu 24.04 PPA build would need an Ubuntu-specific `debian/control`.
+- The release workflow pulls base images through `mirror.gcr.io`, which can lag behind floating tags such as `debian:testing` and `archlinux:latest`.
 
 ## M2 (fcitx5 addon)
 
