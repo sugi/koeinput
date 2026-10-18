@@ -30,8 +30,8 @@ Decisions themselves live in [decisions.md](decisions.md).
 | M1. Daemon and CLI | Implemented and merged into `main` (merge commit `dc1a3bf`). One check left, see below. |
 | M2. Minimal fcitx5 addon | Merged into `main` (merge commit `fe20500`). Tests pass in the Debian 13 and Debian 12 images. The host check is pending; it uses the M3 packages. |
 | M3. Debian packaging | Merged into `main` (merge commit `68abc8e`). The packages build, pass lintian and pass the install test for Debian 13 and Debian testing. The host install and the host check are pending for the user, see below. |
-| M4. Quality | Implemented on branch `m4-quality`; the final review and the merge are pending. The defaults are measured on the user's recordings. See below. |
-| M5. RPM, PKGBUILD, CI, release | Not started. |
+| M4. Quality | Merged into `main` (merge commit `4f55bc4`). The defaults are measured on the user's recordings. See below. |
+| M5. RPM, PKGBUILD, CI, release | In progress on branches `m5-docs`, `m5-ubuntu`, `m5-rpm` and `m5-arch`. |
 
 ### Left over from M1
 
