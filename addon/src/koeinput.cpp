@@ -248,16 +248,16 @@ void KoeInputAddon::handleKeyByCode(fcitx::KeyEvent &event, int code) {
         // the press is a new key.
         const bool repeat = flagged || (!isModifierKey(fcitx::Key(record.sym)) &&
                                         now - record.pressMs <= Controller::kRepeatGapMs);
-        if (repeat && record.role == Role::Hotkey) {
+        if (repeat) {
+            // A repeat goes the way of its press, whatever it would be now (a
+            // held space repeating as Alt+space is not a chord; a held Escape
+            // repeating during a session does not cancel it).
             record.pressMs = now;
-            if (controller_.hotkeyPress(now, eligible(event.inputContext()), isModifierKey(key), true)) {
-                event.filterAndAccept();
+            bool swallow = record.swallowed;
+            if (record.role == Role::Hotkey) {
+                swallow = controller_.hotkeyPress(now, eligible(event.inputContext()), isModifierKey(key), true);
             }
-            return;
-        }
-        if (repeat && record.role == Role::Chord) {
-            record.pressMs = now;
-            event.filterAndAccept();
+            if (swallow) event.filterAndAccept();
             return;
         }
     }

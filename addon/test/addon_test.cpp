@@ -912,7 +912,61 @@ int main() {
                       displayClear(ic());
                       KI_CHECK(!sendCode("space", 65, false));
                       KI_CHECK(!sendCode("space", 65, true));
+                  })
+            // A key the app got keeps its repeats and its release, whatever
+            // they would be classified as now.
+            .then(0, "keycodes, held key then hotkey: space, then Alt_R",
+                  [&] {
+                      KI_CHECK(!sendCode("space", 65, false));
+                      KI_CHECK(sendCode("Alt_R", 108, false));
+                  })
+            .then(500, "keycodes, held key then hotkey: the Alt+space repeats and the release pass",
+                  [&] {
+                      KI_CHECK(!sendCode("Alt+space", 65, false));
+                      KI_CHECK(!sendKey(instance, uuid, Key(FcitxKey_space, KeyStates({KeyState::Alt, KeyState::Repeat}), 65),
+                                        false));
+                      KI_CHECK(!sendCode("Alt+space", 65, true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(900, "keycodes, held key then hotkey: release Alt_R",
+                  [&] { KI_CHECK(sendCode("Alt+Alt_R", 108, true)); })
+            .then(1500, "keycodes, held key then hotkey: committed",
+                  [&] {
+                      committed(30);
+                      displayClear(ic());
+                      setHotkey("Control+space");
+                  })
+            .then(0, "keycodes, rolled hotkey: space, then Control",
+                  [&] {
+                      KI_CHECK(!sendCode("space", 65, false));
+                      KI_CHECK(!sendCode("Control_L", 37, false));
+                  })
+            .then(500, "keycodes, rolled hotkey: the Control+space repeat and the releases pass",
+                  [&] {
+                      KI_CHECK(!sendCode("Control+space", 65, false));
+                      KI_CHECK(ic()->inputPanel().auxUp().empty());
+                      KI_CHECK(!sendCode("Control+space", 65, true));
+                      KI_CHECK(!sendCode("Control+Control_L", 37, true));
+                      committed(30);
                       setHotkey("Alt_R");
+                  })
+            .then(0, "keycodes, held escape then hotkey: Escape, then Alt_R",
+                  [&] {
+                      KI_CHECK(!sendCode("Escape", 9, false));
+                      KI_CHECK(sendCode("Alt_R", 108, false));
+                  })
+            .then(500, "keycodes, held escape then hotkey: the Escape repeat and release pass, the session goes on",
+                  [&] {
+                      KI_CHECK(!sendCode("Alt+Escape", 9, false));
+                      KI_CHECK(!sendCode("Alt+Escape", 9, true));
+                      KI_CHECK(!ic()->inputPanel().auxUp().empty());
+                  })
+            .then(900, "keycodes, held escape then hotkey: release Alt_R",
+                  [&] { KI_CHECK(sendCode("Alt+Alt_R", 108, true)); })
+            .then(1500, "keycodes, held escape then hotkey: committed",
+                  [&] {
+                      committed(31);
+                      displayClear(ic());
                   })
             .then(0, "daemon killed: press",
                   [&] {
@@ -922,7 +976,7 @@ int main() {
             .then(300, "daemon killed: release",
                   [&] {
                       KI_CHECK(send("Alt+Alt_R", true));
-                      committed(29);
+                      committed(31);
                       displayClear(ic());
                   })
             .then(0, "daemon restarted: press",
@@ -932,7 +986,7 @@ int main() {
                   })
             .then(1400, "daemon restarted: release", [&] { KI_CHECK(send("Alt+Alt_R", true)); })
             .then(1500, "daemon restarted: committed", [&] {
-                committed(30);
+                committed(32);
                 displayClear(ic());
             });
     } else {
