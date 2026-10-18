@@ -1,0 +1,160 @@
+# Maintainer: Tatsuki Sugiura <sugi@nemui.org>
+
+pkgbase=koeinput
+pkgname=(koeinput fcitx5-koeinput)
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Local Japanese dictation daemon and command-line tool'
+arch=(x86_64)
+url='https://github.com/sugi/koeinput'
+license=('MIT OR Apache-2.0')
+makedepends=(cargo cmake extra-cmake-modules fcitx5 libpulse)
+# With makepkg's LTO flags, the C code that crate build scripts compile (ring,
+# zstd-sys) becomes GCC LTO bytecode, which Rust's linker (lld) cannot read.
+options=(!lto)
+# The no-TTS archive of packaging/sherpa-onnx.env; the default archive links GPL code.
+_sherpa=sherpa-onnx-v1.13.8-linux-x64-static-no-tts-lib
+# scripts/make-orig makes the three tarballs, the same as for the Debian package.
+# The third is the upstream sherpa-onnx archive byte for byte, so makepkg can also
+# download it. copyright is debian/copyright, which scripts/gen-copyright makes
+# from the same crates.
+source=("${pkgbase}_$pkgver.orig.tar.xz"
+        "${pkgbase}_$pkgver.orig-vendor.tar.xz"
+        "${pkgbase}_$pkgver.orig-sherpaonnx.tar.bz2::https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$_sherpa.tar.bz2"
+        copyright)
+# The main tarball holds this file, and it, the vendor tarball and copyright change
+# with commits and with Cargo.lock, so their sums cannot be pinned here:
+# scripts/build-arch fills them in on a copy with updpkgsums. The sherpa-onnx sum is
+# the pin.
+sha256sums=('SKIP'
+            'SKIP'
+            '36f2ebd0b9aa09248ff6461a30dcb7edfe7eecf2deb67dfb0ceb3aaf4906051f'
+            'SKIP')
+
+_cargo_env() {
+  export CARGO_HOME="$srcdir/cargo-home"
+  # Both paths must be absolute: the sherpa-onnx-sys build script reads them as they are.
+  export CARGO_TARGET_DIR="$srcdir/target"
+  export SHERPA_ONNX_LIB_DIR="$srcdir/sherpa-lib"
+  # The release profile has no debug info, so cargo would strip the debug info that
+  # makepkg adds through RUSTFLAGS, and the -debug package would be empty. makepkg
+  # strips the binaries itself.
+  export CARGO_PROFILE_RELEASE_STRIP=none
+}
+
+# Prints the license and notice files of the vendored crates in crates.txt (the
+# crates in the binaries), found by the same names as scripts/gen-copyright uses
+# for debian/copyright. package_koeinput() installs them; the list is made here
+# because process substitution under fakeroot makes libfakeroot lose messages.
+_crate_licenses() {
+  local name ver rest crate
+  while read -r name ver rest; do
+    # Empty lines separate the trees of the workspace crates, which have a path.
+    [[ -n $name && $rest != "(/"* ]] || continue
+    crate=vendor/$name-${ver#v}
+    if [[ ! -d $crate ]]; then
+      echo "$crate (from cargo tree) does not exist" >&2
+      return 1
+    fi
+    find "$crate" -regextype posix-extended -type f ! -name '*.rs' \( -ipath '*/licenses/*' \
+      -o -iregex '.*/(licen[cs]e|copying|copyright|notice|unlicense)[^/]*' \) -print
+  done < <(sort -u crates.txt)
+}
+
+prepare() {
+  mkdir -p cargo-home
+  cat >cargo-home/config.toml <<EOF
+[source.crates-io]
+replace-with = "vendored-sources"
+[source.vendored-sources]
+directory = "$srcdir/vendor"
+[net]
+offline = true
+EOF
+
+  # The sherpa-onnx-sys build script still links espeak-ng, piper_phonemize and
+  # ucd (the GPL text-to-speech code), so they get empty archives here, as in
+  # scripts/sherpa-onnx.
+  rm -rf sherpa-lib
+  mkdir sherpa-lib
+  ln -s "$srcdir/$_sherpa"/lib/*.a sherpa-lib/
+  local name
+  for name in espeak-ng piper_phonemize ucd; do
+    if [[ -e $_sherpa/lib/lib$name.a ]]; then
+      echo "$_sherpa/lib/lib$name.a exists: not the no-TTS archive" >&2
+      return 1
+    fi
+    ar rcs "sherpa-lib/lib$name.a"
+  done
+}
+
+build() {
+  _cargo_env
+  cd "$pkgbase-$pkgver"
+  cargo build --release --frozen --offline --workspace --bins
+  scripts/check-no-gpl "$CARGO_TARGET_DIR/release/koeinput" "$CARGO_TARGET_DIR/release/koeinput-daemon"
+  "$CARGO_TARGET_DIR/release/koeinput" manpage >"$srcdir/koeinput.1"
+  cargo tree --frozen --offline --workspace -e normal --prefix none -f '{p}' >"$srcdir/crates.txt"
+  (cd "$srcdir" && _crate_licenses) >"$srcdir/crate-licenses.txt"
+
+  cmake -B "$srcdir/build-addon" -S addon -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build "$srcdir/build-addon"
+}
+
+check() {
+  _cargo_env
+  # The tests build the binaries again with other features; they must not replace
+  # the ones that build() checked and package_koeinput() installs.
+  export CARGO_TARGET_DIR="$srcdir/target-test"
+  cd "$pkgbase-$pkgver"
+  cargo test --release --frozen --offline --workspace
+  # The addon's D-Bus and fcitx5 tests and the daemon's D-Bus tests need a session
+  # bus and a test daemon; they run in the development test runs only.
+  ctest --test-dir "$srcdir/build-addon" -R controller --output-on-failure
+}
+
+package_koeinput() {
+  depends=(dbus-units glibc libgcc libpulse libstdc++)
+  optdepends=('fcitx5-koeinput: dictation into any application through fcitx5')
+  # Statically linked: the vendored crates and the sherpa-onnx archive (see
+  # packaging/licenses/README).
+  license=('MIT OR Apache-2.0' Apache-2.0 MIT BSD-2-Clause BSD-3-Clause BSL-1.0
+           bzip2-1.0.6 CDLA-Permissive-2.0 ISC MPL-2.0 Unicode-3.0 Zlib)
+
+  cd "$pkgbase-$pkgver"
+  install -Dm755 "$srcdir/target/release/koeinput" "$pkgdir/usr/bin/koeinput"
+  install -Dm755 "$srcdir/target/release/koeinput-daemon" "$pkgdir/usr/lib/koeinput/koeinput-daemon"
+  local unit="$pkgdir/usr/lib/systemd/user/koeinput.service"
+  local service="$pkgdir/usr/share/dbus-1/services/org.nemui.KoeInput.service"
+  install -Dm644 data/koeinput.service "$unit"
+  install -Dm644 data/org.nemui.KoeInput.service "$service"
+  # Arch has no /usr/libexec, which the other distributions use.
+  sed -i 's|=/usr/libexec/koeinput/koeinput-daemon$|=/usr/lib/koeinput/koeinput-daemon|' "$unit" "$service"
+  if ! grep -qx 'ExecStart=/usr/lib/koeinput/koeinput-daemon' "$unit" ||
+    ! grep -qx 'Exec=/usr/lib/koeinput/koeinput-daemon' "$service"; then
+    echo "the daemon path in data/koeinput.service or data/org.nemui.KoeInput.service changed" >&2
+    return 1
+  fi
+  install -Dm644 data/models.toml "$pkgdir/usr/share/koeinput/models.toml"
+  install -Dm644 "$srcdir/koeinput.1" "$pkgdir/usr/share/man/man1/koeinput.1"
+
+  local licenses="$pkgdir/usr/share/licenses/$pkgname"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE "$srcdir/copyright" -t "$licenses/"
+  install -Dm644 packaging/licenses/* -t "$licenses/sherpa-onnx/"
+  local file
+  while IFS= read -r file; do
+    install -Dm644 "$srcdir/$file" "$licenses/crates/${file#vendor/}"
+  done <"$srcdir/crate-licenses.txt"
+
+  # The installed binaries, before makepkg strips them.
+  scripts/check-no-gpl "$pkgdir/usr/bin/koeinput" "$pkgdir/usr/lib/koeinput/koeinput-daemon"
+}
+
+package_fcitx5-koeinput() {
+  pkgdesc='KoeInput dictation addon for fcitx5'
+  depends=("koeinput=$pkgver-$pkgrel" fcitx5 glibc libgcc libstdc++)
+
+  cd "$pkgbase-$pkgver"
+  DESTDIR="$pkgdir" cmake --install "$srcdir/build-addon"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

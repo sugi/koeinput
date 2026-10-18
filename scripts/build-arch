@@ -1,0 +1,176 @@
+#!/bin/sh
+# Builds the Arch Linux packages with makepkg and checks them with namcap.
+# The build runs in a podman container without network, from the orig tarballs in
+# target/deb/ (made by scripts/make-orig when missing), debian/copyright and
+# packaging/arch/PKGBUILD of the work tree. The packages, the PKGBUILD with the
+# filled-in checksums, the build log and the namcap output go to target/arch/.
+# Usage: scripts/build-arch
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+die() {
+  echo "scripts/build-arch: $*" >&2
+  exit 1
+}
+if [ $# -ne 0 ]; then
+  echo "usage: scripts/build-arch" >&2
+  exit 2
+fi
+
+# Files outside packaging/arch/ come from the orig tarball, which is HEAD;
+# uncommitted changes there would silently be left out of the build.
+if [ -n "$(git status --porcelain -- . ':(exclude)packaging/arch')" ]; then
+  die "commit the changes outside packaging/arch/ first; the build takes them from HEAD"
+fi
+# The package installs debian/copyright as its notices file.
+scripts/gen-copyright --check
+. packaging/sherpa-onnx.env
+
+# scripts/make-orig names the tarballs after the version in debian/changelog.
+version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
+[ -n "$version" ] || die "cannot read the version from debian/changelog"
+upstream=${version#*:}
+upstream=${upstream%-*}
+pkgver=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+[ "$pkgver" = "$upstream" ] ||
+  die "pkgver=$pkgver in packaging/arch/PKGBUILD, but debian/changelog has upstream version $upstream"
+base=koeinput_$upstream
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# scripts/make-orig makes missing tarballs, and stops when the main tarball no
+# longer matches HEAD (the other two follow from files in it).
+current=yes
+for file in "$base.orig.tar.xz" "$base.orig-vendor.tar.xz" "$base.orig-sherpaonnx.tar.bz2"; do
+  [ -e "target/deb/$file" ] || current=no
+done
+if [ $current = yes ]; then
+  git archive --format=tar --prefix="koeinput-$upstream/" HEAD -- . ':(exclude)debian' >"$tmp/main.tar"
+  xz -dc "target/deb/$base.orig.tar.xz" | cmp -s - "$tmp/main.tar" || current=no
+fi
+if [ $current = no ]; then
+  [ -z "$(git status --porcelain)" ] || die "the orig tarballs are missing or older than HEAD,
+and scripts/make-orig needs a clean tree: commit the changes in packaging/arch/ (or
+set them aside), run scripts/make-orig, then run scripts/build-arch again"
+  scripts/make-orig
+fi
+sum=$(sha256sum "target/deb/$base.orig-sherpaonnx.tar.bz2" | cut -d' ' -f1)
+[ "$sum" = "$SHERPA_ONNX_SHA256" ] ||
+  die "target/deb/$base.orig-sherpaonnx.tar.bz2 has SHA-256 $sum, not the pinned $SHERPA_ONNX_SHA256"
+
+containerfile=packaging/containers/arch.Containerfile
+image="localhost/koeinput-arch:$(sha256sum "$containerfile" | cut -c1-12)"
+if ! podman image exists "$image"; then
+  nice -n 10 podman build -t "$image" -f "$containerfile" packaging/containers
+fi
+
+out=target/arch
+rm -rf "$out"
+mkdir -p "$out"
+
+# The build script runs as root in the container ("root"), which copies the
+# PKGBUILD and its sources to the build user and calls the script again as that
+# user ("user") for updpkgsums, makepkg and namcap.
+cat >"$tmp/build.sh" <<'EOF'
+set -eu
+self=/build/build.sh
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+root_main() {
+  dir=/home/builder/build
+  install -d -o builder -g builder "$dir"
+  install -m 644 -o builder -g builder /src/packaging/arch/PKGBUILD /src/target/deb/$BASE.orig* "$dir/"
+  install -m 644 -o builder -g builder /src/debian/copyright "$dir/copyright"
+  st=0
+  runuser -u builder -- env -i HOME=/home/builder PATH=/usr/bin LANG=C.UTF-8 \
+    BASE="$BASE" MAKEFLAGS="$MAKEFLAGS" PACKAGER="$PACKAGER" SHERPA_URL="$SHERPA_URL" SHERPA_SHA256="$SHERPA_SHA256" \
+    sh "$self" user || st=$?
+  # Root in the container is the user who runs podman, so the copies belong to them.
+  for f in "$dir"/*.pkg.tar.* "$dir/PKGBUILD" "$dir/namcap.txt"; do
+    [ ! -e "$f" ] || cp "$f" /out/
+  done
+  exit $st
+}
+
+user_main() {
+  cd "$HOME/build"
+  # The sherpa-onnx source must stay the pinned upstream archive.
+  makepkg --printsrcinfo >.SRCINFO
+  sed -n 's/^[[:space:]]*source = //p' .SRCINFO | grep -qxF "$BASE.orig-sherpaonnx.tar.bz2::$SHERPA_URL" ||
+    fail "the PKGBUILD's sherpa-onnx source is not $SHERPA_URL (packaging/sherpa-onnx.env)"
+  [ "$(sed -n 's/^[[:space:]]*sha256sums = //p' .SRCINFO | sed -n 3p)" = "$SHERPA_SHA256" ] ||
+    fail "the PKGBUILD's third sha256sum is not the pin $SHERPA_SHA256 (packaging/sherpa-onnx.env)"
+
+  # The container has no network, so makepkg -s cannot install anything.
+  deps=$(sed '/^$/q' .SRCINFO | sed -n 's/^[[:space:]]*\(make\|check\)\{0,1\}depends = //p')
+  missing=$(pacman -T $deps) || true
+  [ -z "$missing" ] || fail "add these packages to packaging/containers/arch.Containerfile:" $missing
+
+  updpkgsums
+  [ "$(makepkg --printsrcinfo | sed -n 's/^[[:space:]]*sha256sums = //p' | sed -n 3p)" = "$SHERPA_SHA256" ] ||
+    fail "updpkgsums changed the sherpa-onnx sum"
+  grep -n "^sha256sums=\|^ *'[0-9a-f]\{64\}'" PKGBUILD
+
+  makepkg -s --noconfirm
+
+  printf '\n=== namcap\n'
+  namcap -m PKGBUILD *.pkg.tar.zst >namcap.txt 2>&1 || fail "namcap failed: $(cat namcap.txt)"
+  cat namcap.txt
+}
+
+# PID 1 of the container. A shell as PID 1 ignores signals it has no trap for, so
+# this passes them on; timeout signals its whole process group, and ends a build
+# that hangs.
+pid1() {
+  timeout -k 30 14400 sh "$self" root &
+  pid=$!
+  trap 'kill -TERM $pid 2>/dev/null' HUP INT TERM
+  while :; do
+    st=0
+    wait $pid || st=$?
+    kill -0 $pid 2>/dev/null || exit $st
+  done
+}
+
+case "${1:-root}" in
+  pid1) pid1 ;;
+  root) root_main ;;
+  user) user_main ;;
+esac
+EOF
+
+# podman run --init would need catatonit on the host, so the script runs its own PID 1.
+{
+  nice -n 10 podman run --rm --network=none \
+    -v "$root:/src:ro" -v "$root/$out:/out" -v "$tmp/build.sh:/build/build.sh:ro" \
+    -e BASE="$base" -e MAKEFLAGS="-j$(nproc)" \
+    -e PACKAGER="${PACKAGER:-Tatsuki Sugiura <sugi@nemui.org>}" \
+    -e SHERPA_URL="$SHERPA_ONNX_URL" -e SHERPA_SHA256="$SHERPA_ONNX_SHA256" \
+    "$image" sh /build/build.sh pid1 || echo $? >"$tmp/failed"
+} 2>&1 | tee "$out/build.log"
+if [ -e "$tmp/failed" ]; then
+  die "the build failed; see $out/build.log"
+fi
+
+# namcap -m prints "<package> <E|W>: <tag> <details>". These are known and accepted:
+# - the binaries do use ld-linux-x86-64.so.2: they take __tls_get_addr from it;
+# - koeinput needs a session bus, and fcitx5-koeinput the koeinput daemon, at run
+#   time over D-Bus, not as libraries;
+# - in the -debug package, the .build-id links point into the other two packages,
+#   the addon's build directory has no sources to copy, and namcap reads strings in
+#   the Rust sources as library names.
+accepted='^koeinput W: unused-sodepend /usr/lib64/ld-linux-x86-64\.so\.2 usr/(bin|lib/koeinput)/koeinput(-daemon)?$
+^koeinput W: dependency-not-needed dbus-units$
+^fcitx5-koeinput W: dependency-not-needed koeinput$
+^koeinput-debug E: dangling-symlink usr/lib/debug/\.build-id/[0-9a-f]{2}/[0-9a-f]+ points to (\.\./)+(bin/koeinput|koeinput/koeinput-daemon|fcitx5/libkoeinput\.so)$
+^koeinput-debug W: empty-directory usr/src/debug/koeinput/build-addon$
+^koeinput-debug W: library-no-package-associated .* \[.usr/src/debug/koeinput/vendor/[^]]*\]$'
+[ -e "$out/namcap.txt" ] || die "$out/namcap.txt is missing"
+problems=$(grep -E '^[^:]+ [EW]: ' "$out/namcap.txt" | grep -Ev "$accepted" || true)
+if [ -n "$problems" ]; then
+  echo "$problems" >&2
+  die "namcap reported errors or warnings; see $out/namcap.txt"
+fi
+echo "packages and namcap output in $out/"
