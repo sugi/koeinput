@@ -284,7 +284,7 @@ They are for local debugging. A release uploads only the two user packages per t
 
 ### Documentation in the packages
 
-`koeinput` installs `README.md` and `README.ja.md` in `/usr/share/doc/koeinput/`. Debian and Ubuntu compress them, as all files over 4 kB there: `README.md.gz` and `README.ja.md.gz`. On Fedora, `fcitx5-koeinput` also has `README.md` in `/usr/share/doc/fcitx5-koeinput/`, because rpmlint warns about a package without documentation.
+`koeinput` installs `README.md`, `README.ja.md` and `models.md` (the model attributions) in `/usr/share/doc/koeinput/`. Debian and Ubuntu compress the files over 4 kB there, so the READMEs are `README.md.gz` and `README.ja.md.gz`; `models.md` is smaller and stays plain. On Fedora, `fcitx5-koeinput` also has `README.md` in `/usr/share/doc/fcitx5-koeinput/`, because rpmlint warns about a package without documentation.
 
 ### Install tests
 

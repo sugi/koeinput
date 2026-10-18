@@ -48,7 +48,7 @@ ADDON_DIR=/usr/lib/x86_64-linux-gnu/fcitx5
 COPYRIGHT=/usr/share/doc/koeinput/copyright
 # dh_compress compresses the files in /usr/share/doc that are larger than 4 kB.
 NOTICES=/usr/share/doc/koeinput/onnxruntime-*-ThirdPartyNotices.txt.gz
-KOEINPUT_DOC_FILES="/usr/share/doc/koeinput/README.md.gz /usr/share/doc/koeinput/README.ja.md.gz"
+KOEINPUT_DOC_FILES="/usr/share/doc/koeinput/README.md.gz /usr/share/doc/koeinput/README.ja.md.gz /usr/share/doc/koeinput/models.md"
 ADDON_DOC_FILES=/usr/share/doc/fcitx5-koeinput/copyright
 REMOVED="/usr/share/doc/koeinput /usr/share/doc/fcitx5-koeinput"
 REMOVE_LABEL="apt-get remove"

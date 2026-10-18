@@ -105,6 +105,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # The images, the build trees and the packages need more room than the
+      # runner's root disk has left; the preinstalled toolchains below are unused.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+      - name: Disk use before the build
+        run: |
+          df -h /
+          podman system df || true
       # The build scripts run scripts/gen-copyright --check, which runs in the dev image.
       - uses: ./.github/actions/podman-image
         with:
@@ -155,7 +163,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
-      - name: Disk use
+      - name: Disk use after the build
         if: always()
         run: |
           df -h /
@@ -217,4 +225,4 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/* \
             --draft --verify-tag --title "KoeInput ${GITHUB_REF_NAME#v}" \
-            --notes "Built by the release workflow from $GITHUB_SHA. Check the files and write the release notes before you publish."
+            --notes "Built by the release workflow from the tag $GITHUB_REF_NAME. Check the files and write the release notes before you publish."

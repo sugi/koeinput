@@ -47,7 +47,7 @@ ADDON_DIR=/usr/lib64/fcitx5
 COPYRIGHT=/usr/share/licenses/koeinput/copyright
 NOTICES=/usr/share/licenses/koeinput/onnxruntime-*-ThirdPartyNotices.txt
 KOEINPUT_DOC_FILES="/usr/share/licenses/koeinput/LICENSE-MIT /usr/share/licenses/koeinput/LICENSE-APACHE
-  /usr/share/doc/koeinput/README.md /usr/share/doc/koeinput/README.ja.md"
+  /usr/share/doc/koeinput/README.md /usr/share/doc/koeinput/README.ja.md /usr/share/doc/koeinput/models.md"
 ADDON_DOC_FILES="/usr/share/licenses/fcitx5-koeinput/LICENSE-MIT /usr/share/licenses/fcitx5-koeinput/LICENSE-APACHE
   /usr/share/doc/fcitx5-koeinput/README.md"
 REMOVED="/usr/share/licenses/koeinput /usr/share/licenses/fcitx5-koeinput

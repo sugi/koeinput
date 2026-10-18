@@ -185,7 +185,7 @@ cargo test %{cargo_flags}
 %files
 # No %%systemd_user_post: the unit has no [Install] section, and D-Bus starts it.
 %license LICENSE-MIT LICENSE-APACHE copyright packaging/licenses/*
-%doc README.md README.ja.md
+%doc README.md README.ja.md docs/models.md
 %{_bindir}/koeinput
 %dir %{_libexecdir}/koeinput
 %{_libexecdir}/koeinput/koeinput-daemon

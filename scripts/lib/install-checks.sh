@@ -95,6 +95,8 @@ root_main() {
   # NOTICES is a pattern; the first match is enough.
   set -- $NOTICES
   [ -f "$1" ] || fail "the ONNX Runtime notices ($NOTICES) are not installed"
+  grep -qx "Version=$UPSTREAM" /usr/share/fcitx5/addon/koeinput.conf ||
+    fail "/usr/share/fcitx5/addon/koeinput.conf does not have Version=$UPSTREAM"
   check_files_extra
   list_files | while read -r f; do [ ! -f "$f" ] || echo "  $f"; done
   ok "files in place"

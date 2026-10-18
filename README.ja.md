@@ -23,7 +23,7 @@ arm64 には対応していません。
 - `fcitx5-koeinput`: fcitx5 アドオン。同じバージョンの `koeinput` が必要です。
 
 Debian 13、Debian testing、Ubuntu 24.04、Ubuntu 26.04、Fedora 44、Arch Linux 向けにビルドします。
-ビルド方法は [docs/release.md](docs/release.md) にあります（英語）。下のファイル名はビルドで作られるものです。
+ビルド方法は [docs/development.md](docs/development.md#packages) にあります（英語）。下のファイル名はビルドで作られるものです。
 
 ### Debian / Ubuntu
 
@@ -32,6 +32,7 @@ sudo apt install ./koeinput_0.1.0-1_amd64.deb ./fcitx5-koeinput_0.1.0-1_amd64.de
 ```
 
 Ubuntu 向けは、バージョンにリリース名が付きます（例: `koeinput_0.1.0-1~noble1_amd64.deb`）。
+リリースのダウンロードでは、Debian testing 向けのパッケージ名は `_amd64.testing.deb` で終わります。この印のない名前は Debian 13 向けです。
 
 ### Fedora
 
@@ -146,7 +147,7 @@ KoeInput は [MIT](LICENSE-MIT) または [Apache-2.0](LICENSE-APACHE) のどち
 GPL のコードは含みません。音声合成なしの sherpa-onnx アーカイブでビルドし、`scripts/check-no-gpl` が毎回確認します。
 ライセンス文と著作権表示は、Debian / Ubuntu では `/usr/share/doc/koeinput/copyright`、Fedora / Arch では `/usr/share/licenses/koeinput/` に入ります。[debian/copyright](debian/copyright) にまとめてもあります。
 
-音声認識モデルはパッケージに含まれず、それぞれ別のライセンスです。標準モデルは CC-BY-4.0 で、モデルを配布するときは [docs/models.md](docs/models.md) の帰属表示が必要です。
+音声認識モデルはパッケージに含まれず、それぞれ別のライセンスです。標準モデルは CC-BY-4.0 で、モデルを配布するときは [docs/models.md](docs/models.md) の帰属表示が必要です。`koeinput` パッケージは同じファイルを `/usr/share/doc/koeinput/models.md` に入れます。
 
 ## 関連ドキュメント
 

@@ -42,7 +42,7 @@ git tag -a vX.Y.Z -m "KoeInput X.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The tag must match the version in `Cargo.toml`.
+The tag must match the upstream version in `debian/changelog`; `release.yml` checks that. The install test checks that `Cargo.toml` has the same version.
 
 ## What CI does
 

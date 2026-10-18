@@ -23,7 +23,7 @@ KoeInput has two packages:
 - `fcitx5-koeinput`: the fcitx5 addon. It needs `koeinput` of the same version.
 
 Packages are built for Debian 13, Debian testing, Ubuntu 24.04, Ubuntu 26.04, Fedora 44 and Arch Linux.
-Build them from a source checkout as described in [docs/release.md](docs/release.md); the file names below are what the build produces.
+Build them from a source checkout as described in [docs/development.md](docs/development.md#packages); the file names below are what the build produces.
 
 ### Debian and Ubuntu
 
@@ -32,6 +32,7 @@ sudo apt install ./koeinput_0.1.0-1_amd64.deb ./fcitx5-koeinput_0.1.0-1_amd64.de
 ```
 
 Ubuntu builds carry the release in the version, for example `koeinput_0.1.0-1~noble1_amd64.deb`.
+In the release downloads, the packages for Debian testing end in `_amd64.testing.deb`; the plain names are the Debian 13 packages.
 
 ### Fedora
 
@@ -146,7 +147,7 @@ Binaries link statically with [sherpa-onnx](https://github.com/k2-fsa/sherpa-onn
 No GPL code is in the binaries: builds use the sherpa-onnx archive without text to speech, and `scripts/check-no-gpl` checks every build.
 The license texts and copyright notices are installed in `/usr/share/doc/koeinput/copyright` (Debian and Ubuntu) or `/usr/share/licenses/koeinput/` (Fedora and Arch), and summarized in [debian/copyright](debian/copyright).
 
-The speech models are not part of the packages and have their own licenses. The default model is CC-BY-4.0; if you share the model, you need the attribution given in [docs/models.md](docs/models.md).
+The speech models are not part of the packages and have their own licenses. The default model is CC-BY-4.0; if you share the model, you need the attribution given in [docs/models.md](docs/models.md). The `koeinput` package installs the same file as `models.md` in `/usr/share/doc/koeinput/`.
 
 ## More
 

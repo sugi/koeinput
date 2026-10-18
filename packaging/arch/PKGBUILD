@@ -137,7 +137,7 @@ package_koeinput() {
   fi
   install -Dm644 data/models.toml "$pkgdir/usr/share/koeinput/models.toml"
   install -Dm644 "$srcdir/koeinput.1" "$pkgdir/usr/share/man/man1/koeinput.1"
-  install -Dm644 README.md README.ja.md -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 README.md README.ja.md docs/models.md -t "$pkgdir/usr/share/doc/$pkgname/"
 
   local licenses="$pkgdir/usr/share/licenses/$pkgname"
   install -Dm644 LICENSE-MIT LICENSE-APACHE "$srcdir/copyright" -t "$licenses/"
