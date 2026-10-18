@@ -14,18 +14,22 @@ makedepends=(cargo cmake extra-cmake-modules fcitx5 libpulse)
 options=(!lto)
 # The no-TTS archive of packaging/sherpa-onnx.env; the default archive links GPL code.
 _sherpa=sherpa-onnx-v1.13.8-linux-x64-static-no-tts-lib
-# scripts/make-orig makes these three files, the same as for the Debian package.
+# scripts/make-orig makes the three tarballs, the same as for the Debian package.
 # The third is the upstream sherpa-onnx archive byte for byte, so makepkg can also
-# download it.
+# download it. copyright is debian/copyright, which scripts/gen-copyright makes
+# from the same crates.
 source=("${pkgbase}_$pkgver.orig.tar.xz"
         "${pkgbase}_$pkgver.orig-vendor.tar.xz"
-        "${pkgbase}_$pkgver.orig-sherpaonnx.tar.bz2::https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$_sherpa.tar.bz2")
-# The main tarball holds this file, and it and the vendor tarball change with every
-# commit and with Cargo.lock, so their sums cannot be pinned here: scripts/build-arch
-# fills them in on a copy with updpkgsums. The sherpa-onnx sum is the pin.
+        "${pkgbase}_$pkgver.orig-sherpaonnx.tar.bz2::https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$_sherpa.tar.bz2"
+        copyright)
+# The main tarball holds this file, and it, the vendor tarball and copyright change
+# with commits and with Cargo.lock, so their sums cannot be pinned here:
+# scripts/build-arch fills them in on a copy with updpkgsums. The sherpa-onnx sum is
+# the pin.
 sha256sums=('SKIP'
             'SKIP'
-            '36f2ebd0b9aa09248ff6461a30dcb7edfe7eecf2deb67dfb0ceb3aaf4906051f')
+            '36f2ebd0b9aa09248ff6461a30dcb7edfe7eecf2deb67dfb0ceb3aaf4906051f'
+            'SKIP')
 
 _cargo_env() {
   export CARGO_HOME="$srcdir/cargo-home"
@@ -93,12 +97,15 @@ build() {
   cargo tree --frozen --offline --workspace -e normal --prefix none -f '{p}' >"$srcdir/crates.txt"
   (cd "$srcdir" && _crate_licenses) >"$srcdir/crate-licenses.txt"
 
-  cmake -B "$srcdir/build-addon" -S addon -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr -Wno-dev
+  cmake -B "$srcdir/build-addon" -S addon -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr
   cmake --build "$srcdir/build-addon"
 }
 
 check() {
   _cargo_env
+  # The tests build the binaries again with other features; they must not replace
+  # the ones that build() checked and package_koeinput() installs.
+  export CARGO_TARGET_DIR="$srcdir/target-test"
   cd "$pkgbase-$pkgver"
   cargo test --release --frozen --offline --workspace
   # The addon's D-Bus and fcitx5 tests and the daemon's D-Bus tests need a session
@@ -116,19 +123,31 @@ package_koeinput() {
 
   cd "$pkgbase-$pkgver"
   install -Dm755 "$srcdir/target/release/koeinput" "$pkgdir/usr/bin/koeinput"
-  install -Dm755 "$srcdir/target/release/koeinput-daemon" "$pkgdir/usr/libexec/koeinput/koeinput-daemon"
-  install -Dm644 data/koeinput.service "$pkgdir/usr/lib/systemd/user/koeinput.service"
-  install -Dm644 data/org.nemui.KoeInput.service "$pkgdir/usr/share/dbus-1/services/org.nemui.KoeInput.service"
+  install -Dm755 "$srcdir/target/release/koeinput-daemon" "$pkgdir/usr/lib/koeinput/koeinput-daemon"
+  local unit="$pkgdir/usr/lib/systemd/user/koeinput.service"
+  local service="$pkgdir/usr/share/dbus-1/services/org.nemui.KoeInput.service"
+  install -Dm644 data/koeinput.service "$unit"
+  install -Dm644 data/org.nemui.KoeInput.service "$service"
+  # Arch has no /usr/libexec, which the other distributions use.
+  sed -i 's|=/usr/libexec/koeinput/koeinput-daemon$|=/usr/lib/koeinput/koeinput-daemon|' "$unit" "$service"
+  if ! grep -qx 'ExecStart=/usr/lib/koeinput/koeinput-daemon' "$unit" ||
+    ! grep -qx 'Exec=/usr/lib/koeinput/koeinput-daemon' "$service"; then
+    echo "the daemon path in data/koeinput.service or data/org.nemui.KoeInput.service changed" >&2
+    return 1
+  fi
   install -Dm644 data/models.toml "$pkgdir/usr/share/koeinput/models.toml"
   install -Dm644 "$srcdir/koeinput.1" "$pkgdir/usr/share/man/man1/koeinput.1"
 
   local licenses="$pkgdir/usr/share/licenses/$pkgname"
-  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$licenses/"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE "$srcdir/copyright" -t "$licenses/"
   install -Dm644 packaging/licenses/* -t "$licenses/sherpa-onnx/"
   local file
   while IFS= read -r file; do
     install -Dm644 "$srcdir/$file" "$licenses/crates/${file#vendor/}"
   done <"$srcdir/crate-licenses.txt"
+
+  # The installed binaries, before makepkg strips them.
+  scripts/check-no-gpl "$pkgdir/usr/bin/koeinput" "$pkgdir/usr/lib/koeinput/koeinput-daemon"
 }
 
 package_fcitx5-koeinput() {

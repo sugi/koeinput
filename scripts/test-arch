@@ -56,10 +56,11 @@ wait_for() {
   done
 }
 
-KOEINPUT_FILES="/usr/bin/koeinput /usr/libexec/koeinput/koeinput-daemon
+KOEINPUT_FILES="/usr/bin/koeinput /usr/lib/koeinput/koeinput-daemon
   /usr/lib/systemd/user/koeinput.service /usr/share/dbus-1/services/org.nemui.KoeInput.service
   /usr/share/koeinput/models.toml /usr/share/man/man1/koeinput.1.gz
   /usr/share/licenses/koeinput/LICENSE-MIT /usr/share/licenses/koeinput/LICENSE-APACHE
+  /usr/share/licenses/koeinput/copyright
   /usr/share/licenses/koeinput/sherpa-onnx/onnxruntime-1.28.2-ThirdPartyNotices.txt"
 ADDON_FILES="/usr/lib/fcitx5/libkoeinput.so /usr/share/fcitx5/addon/koeinput.conf
   /usr/share/locale/ja/LC_MESSAGES/fcitx5-koeinput.mo
@@ -73,7 +74,7 @@ check_installed() {
   for f in $ADDON_FILES; do
     [ -f "$f" ] && [ "$(pacman -Qqo "$f")" = fcitx5-koeinput ] || fail "$f is not installed by fcitx5-koeinput"
   done
-  [ -x /usr/bin/koeinput ] && [ -x /usr/libexec/koeinput/koeinput-daemon ] || fail "the binaries are not executable"
+  [ -x /usr/bin/koeinput ] && [ -x /usr/lib/koeinput/koeinput-daemon ] || fail "the binaries are not executable"
   [ "$(pacman -Q koeinput fcitx5-koeinput)" = "koeinput $VERSION
 fcitx5-koeinput $VERSION" ] || fail "pacman -Q shows $(pacman -Q koeinput fcitx5-koeinput)"
 }
@@ -86,13 +87,19 @@ root_main() {
   sed -i '/^NoExtract/d' /etc/pacman.conf
   pacman -U --noconfirm $PKGS
   # Test tools only, installed after the packages so their own dependencies are tested.
-  pacman -S --noconfirm --needed man-db dbus
+  pacman -S --noconfirm --needed man-db
   pacman -Q koeinput fcitx5-koeinput fcitx5 dbus
 
   step "installed files"
   check_installed
-  grep -qx 'Exec=/usr/libexec/koeinput/koeinput-daemon' /usr/share/dbus-1/services/org.nemui.KoeInput.service ||
-    fail "the D-Bus service file does not start /usr/libexec/koeinput/koeinput-daemon"
+  # Arch has no /usr/libexec, so the PKGBUILD changes the path in both files.
+  grep -qx 'Exec=/usr/lib/koeinput/koeinput-daemon' /usr/share/dbus-1/services/org.nemui.KoeInput.service ||
+    fail "the D-Bus service file does not start /usr/lib/koeinput/koeinput-daemon"
+  grep -qx 'ExecStart=/usr/lib/koeinput/koeinput-daemon' /usr/lib/systemd/user/koeinput.service ||
+    fail "the user unit does not start /usr/lib/koeinput/koeinput-daemon"
+  ! pacman -Qlq koeinput | grep -q '^/usr/libexec/' || fail "koeinput installs files in /usr/libexec/"
+  grep -q '^Files: vendor/' /usr/share/licenses/koeinput/copyright ||
+    fail "/usr/share/licenses/koeinput/copyright has no paragraphs for the vendored crates"
   # The daemon starts by D-Bus activation only.
   enabled=$(find /etc/systemd/user /usr/lib/systemd/user -path '*.wants/koeinput.service' 2>/dev/null || true)
   [ -z "$enabled" ] || fail "the user unit is enabled: $enabled"
@@ -111,7 +118,7 @@ root_main() {
 
   step "remove"
   pacman -R --noconfirm fcitx5-koeinput koeinput
-  for f in $KOEINPUT_FILES $ADDON_FILES /usr/libexec/koeinput /usr/share/koeinput \
+  for f in $KOEINPUT_FILES $ADDON_FILES /usr/lib/koeinput /usr/share/koeinput \
     /usr/share/licenses/koeinput /usr/share/licenses/fcitx5-koeinput; do
     [ ! -e "$f" ] || fail "$f is still there after pacman -R"
   done

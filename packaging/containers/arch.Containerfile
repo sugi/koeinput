@@ -5,6 +5,6 @@ FROM docker.io/library/archlinux:latest
 # "builder". pacman-contrib has updpkgsums.
 RUN pacman -Syu --noconfirm --needed \
       base-devel cmake extra-cmake-modules fcitx5 libpulse rust namcap git pacman-contrib \
- && pacman -Scc --noconfirm \
+ && rm -rf /var/cache/pacman/pkg/* \
  && useradd -m builder \
  && rustc --version

@@ -1,8 +1,8 @@
 #!/bin/sh
 # Builds the Arch Linux packages with makepkg and checks them with namcap.
 # The build runs in a podman container without network, from the orig tarballs in
-# target/deb/ (made by scripts/make-orig when missing) and packaging/arch/PKGBUILD
-# of the work tree. The packages, the PKGBUILD with the filled-in checksums, the
+# target/deb/ (made by scripts/make-orig when missing), debian/copyright and
+# packaging/arch/PKGBUILD of the work tree. The packages, the PKGBUILD with the filled-in checksums, the
 # build log and the namcap output go to target/arch/.
 # Usage: scripts/build-arch
 set -eu
@@ -23,6 +23,8 @@ fi
 if [ -n "$(git status --porcelain -- . ':(exclude)packaging/arch')" ]; then
   die "commit the changes outside packaging/arch/ first; the build takes them from HEAD"
 fi
+# The package installs debian/copyright as its notices file.
+scripts/gen-copyright --check
 . packaging/sherpa-onnx.env
 
 # scripts/make-orig names the tarballs after the version in debian/changelog.
@@ -69,7 +71,7 @@ rm -rf "$out"
 mkdir -p "$out"
 
 # The build script runs as root in the container ("root"), which copies the
-# PKGBUILD and the tarballs to the build user and calls the script again as that
+# PKGBUILD and its sources to the build user and calls the script again as that
 # user ("user") for updpkgsums, makepkg and namcap.
 cat >"$tmp/build.sh" <<'EOF'
 set -eu
@@ -80,6 +82,7 @@ root_main() {
   dir=/home/builder/build
   install -d -o builder -g builder "$dir"
   install -m 644 -o builder -g builder /src/packaging/arch/PKGBUILD /src/target/deb/$BASE.orig* "$dir/"
+  install -m 644 -o builder -g builder /src/debian/copyright "$dir/copyright"
   st=0
   runuser -u builder -- env -i HOME=/home/builder PATH=/usr/bin LANG=C.UTF-8 \
     BASE="$BASE" MAKEFLAGS="$MAKEFLAGS" PACKAGER="$PACKAGER" SHERPA_URL="$SHERPA_URL" SHERPA_SHA256="$SHERPA_SHA256" \
@@ -152,20 +155,16 @@ if [ -e "$tmp/failed" ]; then
 fi
 
 # namcap -m prints "<package> <E|W>: <tag> <details>". These are known and accepted:
-# - the daemon is in /usr/libexec/koeinput/, the path that the D-Bus service file and
-#   the user unit name on every distribution (Arch puts such programs in /usr/lib/);
 # - the binaries do use ld-linux-x86-64.so.2: they take __tls_get_addr from it;
 # - koeinput needs a session bus, and fcitx5-koeinput the koeinput daemon, at run
 #   time over D-Bus, not as libraries;
 # - in the -debug package, the .build-id links point into the other two packages,
 #   the addon's build directory has no sources to copy, and namcap reads strings in
 #   the Rust sources as library names.
-accepted='^koeinput E: elffile-not-in-allowed-dirs usr/libexec/koeinput/koeinput-daemon$
-^koeinput W: file-in-non-standard-dir usr/libexec/(koeinput/(koeinput-daemon)?)?$
-^koeinput W: unused-sodepend /usr/lib64/ld-linux-x86-64\.so\.2 usr/(bin/koeinput|libexec/koeinput/koeinput-daemon)$
+accepted='^koeinput W: unused-sodepend /usr/lib64/ld-linux-x86-64\.so\.2 usr/(bin|lib/koeinput)/koeinput(-daemon)?$
 ^koeinput W: dependency-not-needed dbus-units$
 ^fcitx5-koeinput W: dependency-not-needed koeinput$
-^koeinput-debug E: dangling-symlink usr/lib/debug/\.build-id/[0-9a-f]{2}/[0-9a-f]+ points to (\.\./)+(bin/koeinput|libexec/koeinput/koeinput-daemon|fcitx5/libkoeinput\.so)$
+^koeinput-debug E: dangling-symlink usr/lib/debug/\.build-id/[0-9a-f]{2}/[0-9a-f]+ points to (\.\./)+(bin/koeinput|koeinput/koeinput-daemon|fcitx5/libkoeinput\.so)$
 ^koeinput-debug W: empty-directory usr/src/debug/koeinput/build-addon$
 ^koeinput-debug W: library-no-package-associated .* \[.usr/src/debug/koeinput/vendor/[^]]*\]$'
 [ -e "$out/namcap.txt" ] || die "$out/namcap.txt is missing"
