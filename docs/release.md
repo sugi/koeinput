@@ -24,7 +24,7 @@ The repository is private for now, so the release is private too.
    ```sh
    nice -n 10 scripts/make-orig
    nice -n 10 scripts/build-deb trixie && scripts/test-deb trixie
-   nice -n 10 scripts/build-rpm && scripts/test-rpm
+   nice -n 10 scripts/build-rpm fedora44 && scripts/test-rpm fedora44
    nice -n 10 scripts/build-arch && scripts/test-arch
    ```
 
@@ -45,16 +45,42 @@ The tag must match the version in `Cargo.toml`.
 
 ## What CI does
 
-`.github/workflows/release.yml` runs on a `v*` tag and on manual dispatch:
+`.github/workflows/release.yml` runs on a `v*` tag and on manual dispatch. All jobs run the repository's scripts on `ubuntu-24.04` runners with rootless podman.
 
-1. `scripts/make-orig` makes the source tarballs.
-2. A matrix over the six targets builds the packages and runs the install test in a fresh container of each distribution.
-3. On a tag only, it creates a draft release with all packages and a `SHA256SUMS` file.
-   A manual dispatch uploads the packages as workflow artifacts only.
+1. **Orig tarballs**: `scripts/make-orig` makes the three orig tarballs from a full clone and uploads them as the workflow artifact `orig`.
+   On a tag, the job stops when the tag is not `v` followed by the upstream version in `debian/changelog`.
+   The RPM spec's `Source0` to `Source2` are release download URLs under that tag, with these file names.
+2. **Packages**: a matrix over the six targets (`trixie`, `testing`, `noble`, `resolute`, `fedora44`, `arch`). Each job:
+   - downloads the orig tarballs into `target/deb/`. They match HEAD, so the build scripts use them instead of making new ones, and every target builds from the same tarballs;
+   - runs the build script and the install test of its format: `scripts/build-deb <dist>` and `scripts/test-deb <dist>`, `scripts/build-rpm fedora44` and `scripts/test-rpm fedora44`, or `scripts/build-arch` and `scripts/test-arch`;
+   - fails when the install test passed with warnings. On your machine, a test where fcitx5 cannot run without a display passes with a warning and leaves the addon load unchecked; a release needs that check;
+   - uploads the two packages that users install as the artifact `packages-<target>`. The debug symbol packages (`-dbgsym`, `.ddeb`, `-debuginfo`, `-debugsource`, `-debug`) stay out.
+
+   A failed target does not stop the others.
+3. **Draft release**: on a tag push only, after every target has passed. The job:
+   - collects the 12 packages and the three orig tarballs;
+   - writes `SHA256SUMS` over them;
+   - creates a draft release for the tag with `gh release create --draft`. It never publishes the release.
+
+   The Debian testing packages have the same file names as the Debian 13 ones, and the files of a release need different names. So the release names the testing packages `koeinput_X.Y.Z-1_amd64.testing.deb` and `fcitx5-koeinput_X.Y.Z-1_amd64.testing.deb`. Only the file name changes; the package version stays `X.Y.Z-1`.
+
+   If a release for the tag already exists, the job stops. Delete the draft on GitHub, then run the job again.
+
+A manual dispatch, from a branch or a tag, uploads the packages as workflow artifacts only. GitHub starts a manual run only when `release.yml` is on `main`; the run then uses the workflow file of the branch you name:
+
+```sh
+gh workflow run release.yml --ref main
+gh run list --workflow release.yml    # wait for the run to finish
+gh run download <run-id>
+```
+
+The artifacts are kept for 7 days, because they count against the storage quota of the private repository.
+
+Only the draft release job can write to the repository (`contents: write`); the other jobs can only read it.
 
 ## After the build
 
-1. Open the draft release on GitHub and check the package list: two packages per target.
+1. Open the draft release on GitHub and check the file list: two packages for each of the six targets, the three orig tarballs and `SHA256SUMS`.
 2. Download `SHA256SUMS` and the packages and run `sha256sum -c SHA256SUMS`.
 3. Install one package set on a real machine and dictate once.
 4. Write the release notes, then publish the draft.
