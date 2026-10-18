@@ -1,0 +1,70 @@
+name: Podman image from the cache
+description: >
+  Restores one of the repository's build images from the Actions cache and loads
+  it into podman. The scripts tag each image with the first 12 hex digits of the
+  SHA-256 of its Containerfile and build it only when that tag is missing, so a
+  loaded image saves the build. On a cache miss the scripts build the image as
+  they do on a development machine.
+
+inputs:
+  containerfile:
+    description: The name of packaging/containers/<name>.Containerfile, for example dev-trixie.
+    required: true
+  load:
+    description: "'false' only checks whether the cache has the image (for the job that saves it)."
+    default: 'true'
+
+outputs:
+  hit:
+    description: "'true' when the cache has the image."
+    value: ${{ steps.restore.outputs.cache-hit }}
+  image:
+    description: The image name the scripts use.
+    value: ${{ steps.name.outputs.image }}
+  key:
+    description: The cache key.
+    value: ${{ steps.name.outputs.key }}
+  path:
+    description: The file that podman save writes and the cache stores.
+    value: ${{ steps.name.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: name
+      shell: bash
+      env:
+        CONTAINERFILE: ${{ inputs.containerfile }}
+      run: |
+        set -euo pipefail
+        file=packaging/containers/$CONTAINERFILE.Containerfile
+        tag=$(sha256sum "$file" | cut -c1-12)
+        {
+          echo "image=localhost/koeinput-$CONTAINERFILE:$tag"
+          echo "key=podman-$CONTAINERFILE-$tag"
+          echo "path=$RUNNER_TEMP/podman-images/$CONTAINERFILE.tar"
+        } >>"$GITHUB_OUTPUT"
+
+    - id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.name.outputs.path }}
+        key: ${{ steps.name.outputs.key }}
+        lookup-only: ${{ inputs.load != 'true' }}
+
+    - if: inputs.load == 'true' && steps.restore.outputs.cache-hit == 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ steps.name.outputs.image }}
+        IMAGE_TAR: ${{ steps.name.outputs.path }}
+      run: |
+        set -euo pipefail
+        podman load -i "$IMAGE_TAR"
+        rm -f "$IMAGE_TAR"
+        podman image exists "$IMAGE" || { echo "the cached archive does not hold $IMAGE" >&2; exit 1; }
+
+    - if: inputs.load == 'true' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ steps.name.outputs.image }}
+      run: echo "::notice::$IMAGE is not in the cache; the scripts build it."

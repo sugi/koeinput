@@ -1,0 +1,43 @@
+name: Downloads in work/cache from the cache
+description: >
+  Restores the downloads that the scripts keep in work/cache/: the crates that
+  scripts/dev mounts into the build container (the extracted sources are left
+  out; cargo unpacks them again), and the pinned sherpa-onnx archive that
+  scripts/sherpa-onnx would download. The key follows Cargo.lock and
+  packaging/sherpa-onnx.env. Only the rust job of ci.yml saves the cache: it
+  runs every cargo command that downloads crates, so it fetches the full set.
+
+outputs:
+  hit:
+    description: "'true' when the cache has an entry for the current key."
+    value: ${{ steps.restore.outputs.cache-hit }}
+  key:
+    description: The cache key.
+    value: ${{ steps.key.outputs.key }}
+  paths:
+    description: The cached paths, for actions/cache/save.
+    value: ${{ steps.key.outputs.paths }}
+
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      run: |
+        set -euo pipefail
+        sum=$(cat Cargo.lock packaging/sherpa-onnx.env | sha256sum | cut -c1-16)
+        {
+          echo "key=work-cache-$sum"
+          echo "paths<<EOF"
+          echo "work/cache/cargo-registry/index"
+          echo "work/cache/cargo-registry/cache"
+          echo "work/cache/cargo-git/db"
+          echo "work/cache/sherpa-onnx/*.tar.bz2"
+          echo "EOF"
+        } >>"$GITHUB_OUTPUT"
+
+    - id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.key.outputs.paths }}
+        key: ${{ steps.key.outputs.key }}

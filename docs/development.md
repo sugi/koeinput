@@ -416,6 +416,55 @@ Then install a model and restart fcitx5, as in [Install on the host](#install-on
 
 For a new version, set `pkgver` in the PKGBUILD to the new upstream version and keep `pkgrel=1`. build-arch stops when `pkgver` differs from the upstream version in `debian/changelog`.
 
+## CI
+
+GitHub Actions runs the two workflows in `.github/workflows/` on `ubuntu-24.04` runners, which have rootless podman.
+The workflows call the scripts of this repository and use the same images, so you can run every step with the same command on your machine.
+
+`ci.yml` runs on every push to a branch and on pull requests. Its jobs:
+
+- **Image**: builds the `dev-trixie` and `dev-bookworm` images when their Containerfile has changed, and saves them in the Actions cache. The other jobs wait for it and load the images from the cache.
+- **Rust**: `cargo fmt`, clippy, the tests, the D-Bus tests and `scripts/gen-copyright --check`. Then it fails if these commands changed a tracked file, for example an out-of-date `Cargo.lock`.
+- **No GPL code in a release build**: a release build and `scripts/check-no-gpl` on both binaries. It is a job of its own because the release build shares no compiled code with the dev builds, so the two run at the same time.
+- **Rust version in Cargo.toml**: `cargo check` with the `rust-version` of `Cargo.toml` (1.89). rustup in the dev image installs that toolchain for the run.
+- **fcitx5 addon**: `scripts/addon test` in the Debian 13 and the Debian 12 image.
+
+The same checks on your machine:
+
+```sh
+scripts/dev cargo fmt --all --check
+scripts/dev cargo clippy --workspace --all-targets -- -D warnings
+scripts/dev cargo test --workspace
+scripts/dev dbus-run-session -- cargo test -p koeinput-daemon --features test-hooks
+scripts/gen-copyright --check
+scripts/dev cargo build --release --workspace
+scripts/dev scripts/check-no-gpl target/release/koeinput target/release/koeinput-daemon
+scripts/dev sh -c 'rustup toolchain install 1.89 --profile minimal && cargo +1.89 check --workspace --all-targets'
+scripts/addon test
+KOEINPUT_DEV_IMAGE=bookworm scripts/addon test
+```
+
+`scripts/dev` removes its container after each command, so the 1.89 line downloads the toolchain each time.
+
+`release.yml` builds the orig tarballs and the packages of all six targets, and makes a draft release on a tag. [release.md](release.md) describes it. To run it without a tag, start it by hand and download the packages (this needs `release.yml` on `main`):
+
+```sh
+gh workflow run release.yml --ref <branch>
+gh run download <run-id>
+```
+
+The workflows cache two things:
+
+- the `dev-trixie` and `dev-bookworm` images, as `podman save` archives. The cache key contains the same Containerfile hash as the image tag in the scripts, so a changed Containerfile gives a new entry. Only the Image job saves them; `release.yml` loads `dev-trixie` from there too. Loading an image is faster than building it: the `dev-trixie` build installs Rust and compiles `cargo-vendor-filterer`;
+- the downloaded crates and the sherpa-onnx archive from `work/cache/`, keyed on `Cargo.lock` and `packaging/sherpa-onnx.env`. Only the Rust job of `ci.yml` saves this cache, because it runs every command that downloads crates. These files are about 60 MB, so the time saved is small; the main gain is fewer downloads from crates.io and GitHub.
+
+Not cached:
+
+- `target/`: a full build is about 3.5 GB, and a runner has about 14 GB of free disk;
+- the package build images (`deb-*`, `rpm-fedora44`, `arch`): about 2 to 3 GB each. Together they would fill most of the 10 GB cache of the repository, and only release builds use them.
+
+A run on a branch can use the caches of `main` and of its own branch. A run on a tag can use the caches of `main`.
+
 ## Install on the host
 
 Build and test the packages in the dev container first:
