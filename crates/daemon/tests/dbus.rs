@@ -1,7 +1,7 @@
 #![cfg(feature = "test-hooks")]
 
 use futures_util::StreamExt;
-use koeinput_dbus_api::{BUS_NAME, Recognizer1Proxy};
+use koeinput_dbus_api::{BUS_NAME, Recognizer1Proxy, StateChangedStream};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -315,8 +315,28 @@ async fn wait_final_ready(p: &Recognizer1Proxy<'_>) {
     panic!("final-stage model not ready");
 }
 
+/// Waits until the session has ended with `done`.
+/// The daemon frees the session only right before that state goes out, after `Final`,
+/// so a Start sent on receipt of `Final` can still be refused as Busy.
+async fn wait_done(states: &mut StateChangedStream, id: u32) {
+    let ended = async {
+        while let Some(s) = states.next().await {
+            let a = s.args().unwrap();
+            if a.session == id && matches!(a.state.as_str(), "done" | "cancelled" | "error") {
+                return a.state.clone();
+            }
+        }
+        panic!("StateChanged stream ended");
+    };
+    let state = timeout(Duration::from_secs(5), ended)
+        .await
+        .expect("session did not end");
+    assert_eq!(state, "done");
+}
+
 /// Records for about a second and returns the session's partial texts and its final text.
 async fn dictate(p: &Recognizer1Proxy<'_>) -> (Vec<String>, String) {
+    let mut states = p.receive_state_changed().await.unwrap();
     let mut partials = p.receive_partial().await.unwrap();
     let mut finals = p.receive_final_text().await.unwrap();
     let id = p.start(HashMap::new()).await.unwrap();
@@ -328,6 +348,7 @@ async fn dictate(p: &Recognizer1Proxy<'_>) -> (Vec<String>, String) {
         .unwrap();
     let a = f.args().unwrap();
     assert_eq!(a.session, id);
+    wait_done(&mut states, id).await;
     let mut texts = Vec::new();
     while let Ok(Some(s)) = timeout(Duration::from_millis(200), partials.next()).await {
         let a = s.args().unwrap();
@@ -417,6 +438,7 @@ async fn session_started_before_the_final_model_swap_keeps_the_main_model() {
     .await;
     let p = Recognizer1Proxy::new(&conn).await.unwrap();
     wait_ready(&p).await;
+    let mut states = p.receive_state_changed().await.unwrap();
     let mut finals = p.receive_final_text().await.unwrap();
     let id = p.start(HashMap::new()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(1200)).await;
@@ -430,6 +452,7 @@ async fn session_started_before_the_final_model_swap_keeps_the_main_model() {
     let a = f.args().unwrap();
     assert_eq!(a.session, id);
     assert!(!a.text.is_empty() && !a.text.starts_with('F'), "{}", a.text);
+    wait_done(&mut states, id).await;
     let (_, text) = dictate(&p).await;
     assert!(text.starts_with('F'), "{text}");
 }
@@ -576,6 +599,7 @@ async fn dictionary_reload_between_sessions() {
     assert_eq!(text, "one");
 
     // A session keeps the dictionary it started with.
+    let mut states = p.receive_state_changed().await.unwrap();
     let mut finals = p.receive_final_text().await.unwrap();
     let id = p.start(HashMap::new()).await.unwrap();
     std::fs::write(&dict, words("twenty")).unwrap();
@@ -586,6 +610,7 @@ async fn dictionary_reload_between_sessions() {
         .expect("no Final")
         .unwrap();
     assert_eq!(f.args().unwrap().text, "one");
+    wait_done(&mut states, id).await;
     let (_, text) = dictate(&p).await;
     assert_eq!(text, "twenty");
 
@@ -631,11 +656,18 @@ async fn model_installed_after_start_loads_at_the_next_start() {
     let mut ready = p.receive_ready_changed().await;
     open_gate(&marker);
     let id = p.start(HashMap::new()).await.unwrap();
-    let changed = timeout(Duration::from_secs(3), ready.next())
+    // The stream first yields the cached `false`, and the reply to Start can overtake
+    // the PropertiesChanged signal, so wait for the value to become true.
+    let became_ready = async {
+        while let Some(changed) = ready.next().await {
+            if changed.get().await.unwrap() {
+                return;
+            }
+        }
+    };
+    timeout(Duration::from_secs(3), became_ready)
         .await
-        .expect("no PropertiesChanged for Ready")
-        .unwrap();
-    assert!(changed.get().await.unwrap());
+        .expect("no PropertiesChanged for Ready");
     assert!(p.ready().await.unwrap());
     assert_eq!(p.model().await.unwrap(), "fake");
     p.cancel(id).await.unwrap();
