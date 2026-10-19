@@ -1,7 +1,7 @@
 # Release steps
 
 A release is a tag `vX.Y.Z`. CI builds the packages for every target and creates a draft GitHub release; you review and publish it.
-The repository is private for now, so the release is private too.
+Until you publish it, only people with write access to the repository can see the draft.
 
 ## Before you tag
 
@@ -75,7 +75,7 @@ gh run list --workflow release.yml    # wait for the run to finish
 gh run download <run-id>
 ```
 
-The artifacts are kept for 7 days, because they count against the storage quota of the private repository.
+The artifacts are kept for 7 days. They are for checking a build; a release keeps its own copies of the files.
 
 Only the draft release job can write to the repository (`contents: write`); the other jobs can only read it.
 

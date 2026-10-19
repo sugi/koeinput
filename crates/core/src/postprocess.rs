@@ -395,11 +395,11 @@ mod tests {
     #[test]
     fn dictionary_longest_match_single_pass() {
         let p = pp(&[
-            ("ウィスパー", "Whisper"),
-            ("ウィスパーCPP", "whisper.cpp"),
-            ("Whisper", "X"),
+            ("ラスト", "Rust"),
+            ("ラストアップ", "rustup"),
+            ("Rust", "X"),
         ]);
-        assert_eq!(p.apply("ウィスパーCPPとウィスパー"), "whisper.cppとWhisper");
+        assert_eq!(p.apply("ラストアップとラスト"), "rustupとRust");
     }
 
     #[test]
@@ -414,8 +414,8 @@ mod tests {
     fn removes_spaces_between_japanese_only() {
         let p = PostProcessor::empty();
         assert_eq!(
-            p.apply(" 測る の は 次 の 項目 です。 "),
-            "測るのは次の項目です。"
+            p.apply(" 今日 は 雨 が 降り ます。 "),
+            "今日は雨が降ります。"
         );
         assert_eq!(p.apply("git worktree を 使う"), "git worktree を使う");
         assert_eq!(p.apply("これは　全角"), "これは全角");
