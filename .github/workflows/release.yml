@@ -59,7 +59,7 @@ jobs:
           path: target/deb/koeinput_*.orig*
           if-no-files-found: error
           compression-level: 0
-          # Artifacts count against the storage quota of the private repository.
+          # Only the later jobs of this run need them; a release keeps its own copies.
           retention-days: 7
 
   packages:
