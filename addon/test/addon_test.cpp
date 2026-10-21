@@ -113,12 +113,14 @@ int main() {
         KI_CHECK(panel.preedit().empty());
         KI_CHECK(panel.clientPreedit().empty());
     };
+    // The fake recognizer's partial text is "1"; the panel preedit gets a leading space to set it
+    // apart from the status.
     auto inPanel = [&](InputContext *context) {
-        KI_CHECK(!context->inputPanel().preedit().empty());
+        KI_CHECK(context->inputPanel().preedit().toString() == " 1");
         KI_CHECK(context->inputPanel().clientPreedit().empty());
     };
     auto inClient = [&](InputContext *context) {
-        KI_CHECK(!context->inputPanel().clientPreedit().empty());
+        KI_CHECK(context->inputPanel().clientPreedit().toString() == "1");
         KI_CHECK(context->inputPanel().preedit().empty());
     };
     std::optional<koeinput::test::DaemonProcess> daemon;
@@ -189,8 +191,7 @@ int main() {
                   })
             .then(1400, "hold: partial in the panel preedit, release",
                   [&] {
-                      KI_CHECK(!ic()->inputPanel().preedit().empty());
-                      KI_CHECK(ic()->inputPanel().clientPreedit().empty());
+                      inPanel(ic());
                       KI_CHECK(send("Alt+Alt_R", true));
                   })
             .then(1500, "hold: committed",
@@ -210,7 +211,7 @@ int main() {
                   })
             .then(1400, "second context: release",
                   [&] {
-                      KI_CHECK(!ic2()->inputPanel().preedit().empty());
+                      KI_CHECK(ic2()->inputPanel().preedit().toString() == " 1");
                       displayClear(ic());
                       KI_CHECK(sendKey(instance, uuid2, Key("Alt+Alt_R"), true));
                   })
@@ -274,8 +275,7 @@ int main() {
                   })
             .then(1300, "partial: in client preedit, focus out",
                   [&] {
-                      KI_CHECK(!ic()->inputPanel().clientPreedit().empty());
-                      KI_CHECK(ic()->inputPanel().preedit().empty());
+                      inClient(ic());
                       ic()->focusOut();
                   })
             .then(500, "partial: focus out cancelled without a commit",
@@ -288,7 +288,7 @@ int main() {
             .then(0, "partial: press again", [&] { KI_CHECK(send("Alt_R", false)); })
             .then(1300, "partial: in client preedit, release",
                   [&] {
-                      KI_CHECK(!ic()->inputPanel().clientPreedit().empty());
+                      inClient(ic());
                       KI_CHECK(send("Alt+Alt_R", true));
                   })
             .then(1500, "partial: committed",

@@ -390,7 +390,8 @@ void KoeInputAddon::showPartial(const std::string &text) {
         ic->inputPanel().setClientPreedit(preedit);
         ic->updatePreedit();
     } else {
-        ic->inputPanel().setPreedit(fcitx::Text(text));
+        // The classic UI draws aux-up and the preedit with nothing between them.
+        ic->inputPanel().setPreedit(fcitx::Text(" " + text));
     }
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }
