@@ -4,10 +4,11 @@
 # target/deb/ (made by scripts/make-orig when missing) and the debian/ directory of
 # the work tree. Packages, the source package, the build log and the lintian output
 # go to target/deb/<dist>/.
-# The Ubuntu builds (noble is 24.04, resolute is 26.04) add a local changelog entry
-# in the container, so their packages are version <version>~<dist>1; the committed
-# debian/changelog stays as it is.
-# Usage: scripts/build-deb trixie|testing|noble|resolute
+# The trixie (Debian 13), noble (Ubuntu 24.04) and resolute (Ubuntu 26.04) builds
+# add a local changelog entry in the container, so their packages are version
+# <version>~<dist>1, which sorts before the forky build's <version>; the committed
+# debian/changelog stays as it is. The forky build is also the build for sid.
+# Usage: scripts/build-deb trixie|forky|noble|resolute
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -17,10 +18,10 @@ die() {
   exit 1
 }
 case "${1:-}" in
-  trixie | testing) dist=$1 suffix= ;;
-  noble | resolute) dist=$1 suffix="~$1" ;;
+  forky) dist=$1 suffix= ;;
+  trixie | noble | resolute) dist=$1 suffix="~$1" ;;
   *)
-    echo "usage: scripts/build-deb trixie|testing|noble|resolute" >&2
+    echo "usage: scripts/build-deb trixie|forky|noble|resolute" >&2
     exit 2 ;;
 esac
 

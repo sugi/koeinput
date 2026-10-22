@@ -287,6 +287,8 @@ Decided for M3 on 2026-10-18 (details in [the M3 spec](superpowers/specs/2026-10
 - **Decided**: debhelper compat 13, which Debian 13 and testing both support. No dh-cargo, because our crates are not in Debian; the crates come from a vendor tarball, and the build runs offline.
 - **Decided**: The copyright lines of each crate in `debian/copyright` come from the crate's license files. Cargo `authors` are used only when those files name no holder. `scripts/gen-copyright` generates the file.
 - **Decided**: The daemon is not enabled at login. D-Bus starts it on demand through the systemd user unit, and the addon asks for it when fcitx5 loads the addon, so the model is loaded by the first dictation.
+- **Decided** (2026-10-22): The Debian targets are trixie and forky. They are named by codename, because `testing` moves to the next release once forky is released. The forky packages are also the packages for sid, and the release workflow tests them on sid; sid's libraries are as new as testing's or newer.
+  The trixie packages get the version `<version>~trixie1`, as the Ubuntu builds get `~<dist>1`. Before, the trixie and testing packages had the same version and file names, so the testing packages were easy to take for the Debian 13 ones. They cannot work on Debian 13: a build on testing links float functions of libm (`asinf`, `acosf` and others) at the symbol version `GLIBC_2.43`, and Debian 13 has glibc 2.41. So the `libc6 (>= 2.43)` dependency is correct, and the fix is the trixie build, not a looser dependency.
 
 ## Quality (M4)
 

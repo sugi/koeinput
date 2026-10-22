@@ -5,7 +5,9 @@
 # the koeinput command and man page, D-Bus activation of the daemon, loading the
 # addon in a headless fcitx5, then removal and a second install. apt needs the
 # network for the dependencies. The output also goes to target/deb/<dist>/test.log.
-# Usage: scripts/test-deb trixie|testing|noble|resolute
+# sid has no build of its own: "sid" tests the forky packages in debian:sid and
+# saves the output in target/deb/forky/test-sid.log.
+# Usage: scripts/test-deb trixie|forky|sid|noble|resolute
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -15,11 +17,13 @@ die() {
   exit 1
 }
 case "${1:-}" in
-  trixie | testing) dist=$1 image=docker.io/library/debian:$1 suffix= ;;
-  noble) dist=$1 image=docker.io/library/ubuntu:24.04 suffix="~${1}1" ;;
-  resolute) dist=$1 image=docker.io/library/ubuntu:26.04 suffix="~${1}1" ;;
+  trixie) dist=$1 image=docker.io/library/debian:$1 suffix="~${1}1" log=test.log ;;
+  forky) dist=$1 image=docker.io/library/debian:$1 suffix='' log=test.log ;;
+  sid) dist=forky image=docker.io/library/debian:sid suffix='' log=test-sid.log ;;
+  noble) dist=$1 image=docker.io/library/ubuntu:24.04 suffix="~${1}1" log=test.log ;;
+  resolute) dist=$1 image=docker.io/library/ubuntu:26.04 suffix="~${1}1" log=test.log ;;
   *)
-    echo "usage: scripts/test-deb trixie|testing|noble|resolute" >&2
+    echo "usage: scripts/test-deb trixie|forky|sid|noble|resolute" >&2
     exit 2 ;;
 esac
 
@@ -27,7 +31,7 @@ version=$(sed -n '1s/^[^ ]* (\([^)]*\)).*/\1/p' debian/changelog)
 [ -n "$version" ] || die "cannot read the version from debian/changelog"
 version=${version#*:}
 upstream=${version%-*}
-# scripts/build-deb adds this local version to the Ubuntu builds.
+# scripts/build-deb adds this local version to the trixie and Ubuntu builds.
 version=$version$suffix
 out=target/deb/$dist
 for pkg in koeinput fcitx5-koeinput; do
@@ -84,7 +88,7 @@ EOF
     -v "$tmp/format.sh:/test/format.sh:ro" \
     -e VERSION="$version" -e UPSTREAM="$upstream" \
     "$image" sh /test/checks.sh pid1 || echo $? >"$tmp/failed"
-} 2>&1 | tee "$out/test.log"
+} 2>&1 | tee "$out/$log"
 if [ -e "$tmp/failed" ]; then
-  die "the install test failed for $dist; see $out/test.log"
+  die "the install test failed for $1; see $out/$log"
 fi

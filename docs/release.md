@@ -28,7 +28,7 @@ Until you publish it, only people with write access to the repository can see th
    nice -n 10 scripts/build-arch && scripts/test-arch
    ```
 
-   The other Debian and Ubuntu targets use the same scripts with `testing`, `noble` or `resolute` (Ubuntu 26.04).
+   The other Debian and Ubuntu targets use the same scripts with `forky`, `noble` or `resolute` (Ubuntu 26.04). `scripts/test-deb sid` tests the forky packages on sid.
    Builds run without network from the orig tarballs. Each build runs `scripts/check-no-gpl` on the files that go into the package, before they are stripped.
    Each build also makes debug packages: `-dbgsym` on Debian, `.ddeb` on Ubuntu, `-debuginfo` and `-debugsource` on Fedora, and `-debug` on Arch. They are for local debugging; a release uploads only the two user packages per target.
    [Packages](development.md#packages) in the development notes describes the scripts and their checks.
@@ -51,9 +51,9 @@ The tag must match the upstream version in `debian/changelog`; `release.yml` che
 1. **Orig tarballs**: `scripts/make-orig` makes the three orig tarballs from a full clone and uploads them as the workflow artifact `orig`.
    On a tag, the job stops when the tag is not `v` followed by the upstream version in `debian/changelog`.
    The RPM spec's `Source0` to `Source2` are release download URLs under that tag, with these file names.
-2. **Packages**: a matrix over the six targets (`trixie`, `testing`, `noble`, `resolute`, `fedora44`, `arch`). Each job:
+2. **Packages**: a matrix over the six targets (`trixie`, `forky`, `noble`, `resolute`, `fedora44`, `arch`). Each job:
    - downloads the orig tarballs into `target/deb/`. They match HEAD, so the build scripts use them instead of making new ones, and every target builds from the same tarballs;
-   - runs the build script and the install test of its format: `scripts/build-deb <dist>` and `scripts/test-deb <dist>`, `scripts/build-rpm fedora44` and `scripts/test-rpm fedora44`, or `scripts/build-arch` and `scripts/test-arch`;
+   - runs the build script and the install test of its format: `scripts/build-deb <dist>` and `scripts/test-deb <dist>`, `scripts/build-rpm fedora44` and `scripts/test-rpm fedora44`, or `scripts/build-arch` and `scripts/test-arch`. The forky job also runs `scripts/test-deb sid`, because the forky packages are the packages for sid too;
    - fails when the install test passed with warnings. On your machine, a test where fcitx5 cannot run without a display passes with a warning and leaves the addon load unchecked; a release needs that check;
    - uploads the two packages that users install as the artifact `packages-<target>`. The debug symbol packages (`-dbgsym`, `.ddeb`, `-debuginfo`, `-debugsource`, `-debug`) stay out.
 
@@ -63,7 +63,7 @@ The tag must match the upstream version in `debian/changelog`; `release.yml` che
    - writes `SHA256SUMS` over them;
    - creates a draft release for the tag with `gh release create --draft`. It never publishes the release.
 
-   The Debian testing packages have the same file names as the Debian 13 ones, and the files of a release need different names. So the release names the testing packages `koeinput_X.Y.Z-1_amd64.testing.deb` and `fcitx5-koeinput_X.Y.Z-1_amd64.testing.deb`. Only the file name changes; the package version stays `X.Y.Z-1`.
+   Every Debian and Ubuntu target has its own version, so the file names differ: `X.Y.Z-1~trixie1` for Debian 13, `X.Y.Z-1` for forky and sid, `X.Y.Z-1~noble1` and `X.Y.Z-1~resolute1` for Ubuntu. The job stops if two targets have a file with the same name.
 
    If a release for the tag already exists, the job stops. Delete the draft on GitHub, then run the job again.
 

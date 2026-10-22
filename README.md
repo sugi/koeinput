@@ -22,17 +22,25 @@ KoeInput has two packages:
 - `koeinput`: the daemon, the `koeinput` command, the systemd user unit, the D-Bus service file and the model catalog.
 - `fcitx5-koeinput`: the fcitx5 addon. It needs `koeinput` of the same version.
 
-Packages are built for Debian 13, Debian testing, Ubuntu 24.04, Ubuntu 26.04, Fedora 44 and Arch Linux.
+Packages are built for Debian 13 (trixie), Debian testing (forky) and unstable (sid), Ubuntu 24.04, Ubuntu 26.04, Fedora 44 and Arch Linux.
 Build them from a source checkout as described in [docs/development.md](docs/development.md#packages); the file names below are what the build produces.
 
 ### Debian and Ubuntu
 
 ```sh
-sudo apt install ./koeinput_0.1.0-1_amd64.deb ./fcitx5-koeinput_0.1.0-1_amd64.deb
+sudo apt install ./koeinput_0.1.0-1~trixie1_amd64.deb ./fcitx5-koeinput_0.1.0-1~trixie1_amd64.deb
 ```
 
-Ubuntu builds carry the release in the version, for example `koeinput_0.1.0-1~noble1_amd64.deb`.
-In the release downloads, the packages for Debian testing end in `_amd64.testing.deb`; the plain names are the Debian 13 packages.
+This example is for Debian 13. Install the packages built for your release; the version in the file name tells which one it is:
+
+| Release | `koeinput` package |
+|---|---|
+| Debian 13 (trixie) | `koeinput_0.1.0-1~trixie1_amd64.deb` |
+| Debian testing (forky) and unstable (sid) | `koeinput_0.1.0-1_amd64.deb` |
+| Ubuntu 24.04 | `koeinput_0.1.0-1~noble1_amd64.deb` |
+| Ubuntu 26.04 | `koeinput_0.1.0-1~resolute1_amd64.deb` |
+
+Packages built for a newer release do not install on an older one: apt reports unmet dependencies such as `libc6 (>= 2.43)`.
 
 ### Fedora
 

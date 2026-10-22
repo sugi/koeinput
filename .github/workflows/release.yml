@@ -74,32 +74,33 @@ jobs:
           - target: trixie
             build: scripts/build-deb trixie
             test: scripts/test-deb trixie
-            log: target/deb/trixie/test.log
+            logs: target/deb/trixie/test.log
             packages: target/deb/trixie/koeinput_*_amd64.deb target/deb/trixie/fcitx5-koeinput_*_amd64.deb
-          - target: testing
-            build: scripts/build-deb testing
-            test: scripts/test-deb testing
-            log: target/deb/testing/test.log
-            packages: target/deb/testing/koeinput_*_amd64.deb target/deb/testing/fcitx5-koeinput_*_amd64.deb
+          # The forky packages are also the packages for sid.
+          - target: forky
+            build: scripts/build-deb forky
+            test: scripts/test-deb forky && scripts/test-deb sid
+            logs: target/deb/forky/test.log target/deb/forky/test-sid.log
+            packages: target/deb/forky/koeinput_*_amd64.deb target/deb/forky/fcitx5-koeinput_*_amd64.deb
           - target: noble
             build: scripts/build-deb noble
             test: scripts/test-deb noble
-            log: target/deb/noble/test.log
+            logs: target/deb/noble/test.log
             packages: target/deb/noble/koeinput_*_amd64.deb target/deb/noble/fcitx5-koeinput_*_amd64.deb
           - target: resolute
             build: scripts/build-deb resolute
             test: scripts/test-deb resolute
-            log: target/deb/resolute/test.log
+            logs: target/deb/resolute/test.log
             packages: target/deb/resolute/koeinput_*_amd64.deb target/deb/resolute/fcitx5-koeinput_*_amd64.deb
           - target: fedora44
             build: scripts/build-rpm fedora44
             test: scripts/test-rpm fedora44
-            log: target/rpm/fedora44/test.log
+            logs: target/rpm/fedora44/test.log
             packages: target/rpm/fedora44/koeinput-[0-9]*.x86_64.rpm target/rpm/fedora44/fcitx5-koeinput-[0-9]*.x86_64.rpm
           - target: arch
             build: scripts/build-arch
             test: scripts/test-arch
-            log: target/arch/test.log
+            logs: target/arch/test.log
             packages: target/arch/koeinput-[0-9]*-x86_64.pkg.tar.zst target/arch/fcitx5-koeinput-[0-9]*-x86_64.pkg.tar.zst
     steps:
       - uses: actions/checkout@v7
@@ -132,14 +133,17 @@ jobs:
       # display, and the addon load is then not checked. A release needs every check.
       - name: The install test ran every check
         env:
-          LOG: ${{ matrix.log }}
+          LOGS: ${{ matrix.logs }}
         run: |
           set -euo pipefail
-          if ! grep -qx 'PASSED: all checks' "$LOG"; then
-            sed -n '/^PASSED WITH WARNINGS/,$p' "$LOG" >&2
-            echo "the install test did not run every check; see $LOG" >&2
-            exit 1
-          fi
+          read -ra logs <<<"$LOGS"
+          for log in "${logs[@]}"; do
+            if ! grep -qx 'PASSED: all checks' "$log"; then
+              sed -n '/^PASSED WITH WARNINGS/,$p' "$log" >&2
+              echo "the install test did not run every check; see $log" >&2
+              exit 1
+            fi
+          done
       # Only the two packages that users install; not the debug symbol packages.
       - name: Collect the packages
         env:
@@ -194,17 +198,10 @@ jobs:
           dirs=(dist/packages-*/)
           [ "${#dirs[@]}" -gt 0 ] || { echo "no package artifacts" >&2; exit 1; }
           for dir in "${dirs[@]}"; do
-            target=${dir#dist/packages-}
-            target=${target%/}
             files=("$dir"*)
             [ "${#files[@]}" -eq 2 ] || { echo "$dir: expected 2 packages, found ${#files[@]}" >&2; exit 1; }
             for file in "${files[@]}"; do
               name=${file##*/}
-              # The Debian testing packages have the same file names as the Debian 13
-              # ones, and release assets need unique names.
-              if [ "$target" = testing ]; then
-                name=${name%.deb}.testing.deb
-              fi
               [ ! -e "$out/$name" ] || { echo "two targets have a file named $name" >&2; exit 1; }
               cp "$file" "$out/$name"
             done

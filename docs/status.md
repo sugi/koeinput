@@ -1,6 +1,6 @@
 # Project status and handoff
 
-Last updated: 2026-10-18.
+Last updated: 2026-10-22.
 
 This file is the starting point for a new working session.
 It says where the project stands, what comes next, and how the working environment is set up.
@@ -50,7 +50,7 @@ Decisions themselves live in [decisions.md](decisions.md).
 
 ### Next for the user
 
-1. Host install and host check: build `scripts/build-deb testing` and `scripts/test-deb testing` in the dev container, or download the `packages-testing` artifact of a `release.yml` run. Install on the host, install the model and restart fcitx5 as in [development.md](development.md#install-on-the-host). If the M3 packages are installed, use `apt install --reinstall` (same version). Then go through the [host check](development.md#host-check) in WezTerm, Chrome, Firefox, Emacs and Discord.
+1. Host install and host check: build `scripts/build-deb forky` and `scripts/test-deb forky` in the dev container, or download the `packages-forky` artifact of a `release.yml` run. Install on the host, install the model and restart fcitx5 as in [development.md](development.md#install-on-the-host). If the M3 packages are installed, use `apt install --reinstall` (same version). Then go through the [host check](development.md#host-check) in WezTerm, Chrome, Firefox, Emacs and Discord.
 2. The microphone check left over from M1 (below).
 3. Decide when to make the repository public and when to tag the first release ([release.md](release.md)).
 
@@ -58,7 +58,7 @@ Decisions themselves live in [decisions.md](decisions.md).
 
 Spec: [M5 spec](superpowers/specs/2026-10-18-m5-release-design.md).
 
-- Packages for Debian 13, Debian testing, Ubuntu 24.04, Ubuntu 26.04 (`.deb`), Fedora 44 (`.rpm`) and Arch Linux, all built offline from the same three orig tarballs. Each format runs `scripts/check-no-gpl` on the files that go into the package, ships `debian/copyright`, the license texts and `models.md`, and passes the same install test in a fresh container (`scripts/lib/install-checks.sh`). See [development.md](development.md#packages).
+- Packages for Debian 13, Debian testing (forky, also installed on sid), Ubuntu 24.04, Ubuntu 26.04 (`.deb`), Fedora 44 (`.rpm`) and Arch Linux, all built offline from the same three orig tarballs. Each format runs `scripts/check-no-gpl` on the files that go into the package, ships `debian/copyright`, the license texts and `models.md`, and passes the same install test in a fresh container (`scripts/lib/install-checks.sh`). See [development.md](development.md#packages).
 - `README.md` and `README.ja.md` for users; [models.md](models.md) with the CC-BY-4.0 attribution of the default model; [release.md](release.md) with the release steps.
 - The private GitHub repository `sugi/koeinput`. `ci.yml` runs on every push and pull request; `release.yml` builds and tests all six targets on a `v*` tag or by hand, and makes a draft release only on a tag. No tag has been pushed.
 
@@ -122,7 +122,7 @@ Facts already checked for M2 (2026-10-17):
 ### Building
 
 - Rootless podman works inside the dev container. `scripts/dev <command>` runs any command in the Debian 13 build image (`packaging/containers/dev-trixie.Containerfile`, Rust 1.95.0, libpulse-dev, dbus) with the repository at `/src` and `nice -n 10`.
-- The Debian packages build in their own images (`packaging/containers/deb-trixie.Containerfile` and `deb-testing.Containerfile`) through `scripts/build-deb`, and `scripts/test-deb` tests them in fresh `debian:trixie` and `debian:testing` containers.
+- The Debian packages build in their own images (`packaging/containers/deb-trixie.Containerfile` and `deb-forky.Containerfile`) through `scripts/build-deb`, and `scripts/test-deb` tests them in fresh `debian:trixie`, `debian:forky` and `debian:sid` containers.
 - `podman run --init` does not work here (no `catatonit`). `scripts/build-deb` uses tini from its image, and `scripts/test-deb` runs its own PID 1.
 - Binaries built there run directly in the dev container (same glibc).
 - D-Bus tests: `scripts/dev dbus-run-session -- cargo test -p koeinput-daemon --features test-hooks`.
