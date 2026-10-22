@@ -403,6 +403,29 @@ int main() {
                       setOption("PanelApps", "");
                       KI_CHECK(configValue("PanelApps/0") == "<unset>");
                   })
+            .then(0, "tail list: options load and save, press",
+                  [&] {
+                      KI_CHECK(configValue("TailLength") == "30");
+                      setOption("TailApps/0", " TestApp ");
+                      setOption("TailLength", "10");
+                      KI_CHECK(configValue("TailApps/0") == " TestApp ");
+                      KI_CHECK(configValue("TailLength") == "10");
+                      ic()->setCapabilityFlags(CapabilityFlag::Preedit);
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(1300, "tail list: partial text still in the client preedit",
+                  [&] {
+                      inClient(ic());
+                      cancelSession(uuid);
+                  })
+            .then(1000, "tail list: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic());
+                      ic()->setCapabilityFlags(CapabilityFlags());
+                      setOption("TailApps", "");
+                      KI_CHECK(configValue("TailApps/0") == "<unset>");
+                  })
             .then(0, "plain hotkey: press Control+space",
                   [&] {
                       setHotkey("Control+space");

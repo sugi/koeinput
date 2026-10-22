@@ -104,3 +104,11 @@ msgstr ""
 #: addon/src/config.h:43
 msgid "Apps that show partial text in the panel"
 msgstr ""
+
+#: addon/src/config.h:45
+msgid "Apps that show only the end of partial text"
+msgstr ""
+
+#: addon/src/config.h:47
+msgid "Characters shown at the end"
+msgstr ""

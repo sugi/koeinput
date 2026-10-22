@@ -38,6 +38,7 @@ private:
     bool hotkeyPress(fcitx::KeyEvent &event, uint64_t nowMs, bool flagged);
     bool eligible(fcitx::InputContext *ic) const;
     PartialTarget partialTarget(const fcitx::InputContext &ic) const;
+    size_t tailLimit(const fcitx::InputContext &ic) const;
     void applyConfig();
 
     void callStart() override;
@@ -58,6 +59,8 @@ private:
     fcitx::TrackableObjectReference<fcitx::InputContext> sessionIc_;
     // Chosen when the session starts, from the context's program and the settings.
     PartialTarget partialTarget_ = PartialTarget::None;
+    // 0 shows the whole partial text.
+    size_t tailLimit_ = 0;
     // A key press whose release has not come yet.
     struct PressedKey {
         fcitx::KeySym sym = FcitxKey_None;
