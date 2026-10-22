@@ -22,17 +22,25 @@ arm64 には対応していません。
 - `koeinput`: デーモン、`koeinput` コマンド、systemd ユーザーユニット、D-Bus サービスファイル、モデルカタログ。
 - `fcitx5-koeinput`: fcitx5 アドオン。同じバージョンの `koeinput` が必要です。
 
-Debian 13、Debian testing、Ubuntu 24.04、Ubuntu 26.04、Fedora 44、Arch Linux 向けにビルドします。
+Debian 13 (trixie)、Debian testing (forky) と unstable (sid)、Ubuntu 24.04、Ubuntu 26.04、Fedora 44、Arch Linux 向けにビルドします。
 ビルド方法は [docs/development.md](docs/development.md#packages) にあります（英語）。下のファイル名はビルドで作られるものです。
 
 ### Debian / Ubuntu
 
 ```sh
-sudo apt install ./koeinput_0.1.0-1_amd64.deb ./fcitx5-koeinput_0.1.0-1_amd64.deb
+sudo apt install ./koeinput_0.1.0-1~trixie1_amd64.deb ./fcitx5-koeinput_0.1.0-1~trixie1_amd64.deb
 ```
 
-Ubuntu 向けは、バージョンにリリース名が付きます（例: `koeinput_0.1.0-1~noble1_amd64.deb`）。
-リリースのダウンロードでは、Debian testing 向けのパッケージ名は `_amd64.testing.deb` で終わります。この印のない名前は Debian 13 向けです。
+この例は Debian 13 向けです。使っているリリース向けのパッケージを入れてください。どのリリース向けかはファイル名のバージョンで分かります。
+
+| リリース | `koeinput` パッケージ |
+|---|---|
+| Debian 13 (trixie) | `koeinput_0.1.0-1~trixie1_amd64.deb` |
+| Debian testing (forky) と unstable (sid) | `koeinput_0.1.0-1_amd64.deb` |
+| Ubuntu 24.04 | `koeinput_0.1.0-1~noble1_amd64.deb` |
+| Ubuntu 26.04 | `koeinput_0.1.0-1~resolute1_amd64.deb` |
+
+新しいリリース向けのパッケージは、古いリリースには入りません。apt が `libc6 (>= 2.43)` のような依存関係を満たせないと報告します。
 
 ### Fedora
 

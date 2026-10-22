@@ -224,7 +224,7 @@ They are built for amd64 only. Everything runs in podman containers. Each format
 
 | Target | Build and test | Output |
 |---|---|---|
-| Debian 13, Debian testing, Ubuntu 24.04, Ubuntu 26.04 | `scripts/build-deb <dist>`, `scripts/test-deb <dist>` with `trixie`, `testing`, `noble` or `resolute` | `target/deb/<dist>/` |
+| Debian 13, Debian testing and unstable, Ubuntu 24.04, Ubuntu 26.04 | `scripts/build-deb <dist>`, `scripts/test-deb <dist>` with `trixie`, `forky`, `noble` or `resolute`; `scripts/test-deb sid` tests the forky packages on sid | `target/deb/<dist>/` |
 | Fedora 44 | `scripts/build-rpm fedora44`, `scripts/test-rpm fedora44` | `target/rpm/fedora44/` |
 | Arch Linux | `scripts/build-arch`, `scripts/test-arch` | `target/arch/` |
 
@@ -247,7 +247,7 @@ The files in the main tarball come from HEAD, so commit them before you build. E
 
 ```sh
 rm target/deb/koeinput_0.1.0.orig*
-scripts/build-deb testing
+scripts/build-deb forky
 ```
 
 make-orig needs a clean work tree, so commit or set aside the packaging changes first.
@@ -314,30 +314,35 @@ After a change of `Cargo.lock`, run `scripts/gen-copyright` and read the diff of
 
 ## Debian packages
 
-`debian/` builds the packages for Debian 13 (trixie), Debian testing, Ubuntu 24.04 (noble) and Ubuntu 26.04 (resolute), all from the same directory. See [Packages](#packages) for what all formats share.
+`debian/` builds the packages for Debian 13 (trixie), Debian testing (forky), Ubuntu 24.04 (noble) and Ubuntu 26.04 (resolute), all from the same directory. The forky packages are also the packages for Debian unstable (sid). See [Packages](#packages) for what all formats share.
 
 ```sh
-scripts/build-deb testing      # or trixie, noble, resolute
-scripts/test-deb testing
+scripts/build-deb forky        # or trixie, noble, resolute
+scripts/test-deb forky
+scripts/test-deb sid           # the forky packages on sid
 ```
 
-Build the packages for each release on its own: they depend on the library versions of the release they were built on (for example fcitx5 5.1.19 or newer for a 26.04 build).
+Build the packages for each release on its own: they depend on the library versions of the release they were built on. For example, a forky build needs glibc 2.43, because it links float functions of libm such as `asinf` at the symbol version `GLIBC_2.43`, and Debian 13 has glibc 2.41. A 26.04 build needs fcitx5 5.1.19 or newer.
 
-- `scripts/build-deb trixie|testing|noble|resolute` builds the source and binary packages without network in the image from `packaging/containers/deb-<dist>.Containerfile`, then runs lintian. The packages, the source package, `build.log` and `lintian.txt` go to `target/deb/<dist>/`.
+sid has no build of its own. Its libraries are as new as those of testing or newer, so the forky packages install there. They can fail only while sid has a library with a new soname that has not reached testing yet.
+
+- `scripts/build-deb trixie|forky|noble|resolute` builds the source and binary packages without network in the image from `packaging/containers/deb-<dist>.Containerfile`, then runs lintian. The packages, the source package, `build.log` and `lintian.txt` go to `target/deb/<dist>/`.
   - It runs the [checks in every build](#checks-in-every-build).
   - Files outside `debian/` come from HEAD through the orig tarball, so commit them first. `debian/` comes from the work tree, so you can try packaging changes before you commit them.
   - Rust comes from the distribution. The workspace needs 1.89:
     - Debian 13 has rustc 1.85, so the trixie image takes Rust from trixie-backports;
     - Ubuntu 24.04 has rustc 1.75, so the noble image installs `rustc-1.91` and `cargo-1.91` (noble-updates). They install to `/usr/lib/rust-1.91/bin`, which `debian/rules` puts first in `PATH` when it exists. `debian/control` accepts either `rustc (>= 1.89)` or `rustc-1.91` (and the same for cargo);
-    - Debian testing and Ubuntu 26.04 have new enough Rust.
+    - Debian forky and Ubuntu 26.04 have new enough Rust.
 
     `debian/rules` stops with a message when `rustc` is older than 1.89.
-  - The Ubuntu builds get their own version: in the container, before the package build, the script adds a local entry to `debian/changelog` with `dch --local ~<dist> --distribution <dist>`. The packages are then `0.1.0-1~noble1` and `0.1.0-1~resolute1`. The entry is dated one second after the committed top entry, so the build date does not depend on when it runs, and the entry is newer than the one below it, as lintian wants. The committed `debian/changelog` does not change, and the Debian builds keep `0.1.0-1`.
+  - The trixie and Ubuntu builds get their own version: in the container, before the package build, the script adds a local entry to `debian/changelog` with `dch --local ~<dist> --distribution <dist>`. The packages are then `0.1.0-1~trixie1`, `0.1.0-1~noble1` and `0.1.0-1~resolute1`. The entry is dated one second after the committed top entry, so the build date does not depend on when it runs, and the entry is newer than the one below it, as lintian wants. The committed `debian/changelog` does not change, and the forky build keeps `0.1.0-1`.
 
-    The Ubuntu builds print `dpkg-genchanges: warning: the current version (0.1.0-1~<dist>1) is earlier than the previous one (0.1.0-1)`. This is expected: the local `~<dist>1` entry sits above `-1` on purpose, and `~` sorts before the end of the version.
+    So every Debian and Ubuntu target has its own file names. `~` sorts before the end of the version, so `0.1.0-1~trixie1` is older than `0.1.0-1`: after an upgrade from Debian 13 to forky, apt replaces the trixie build with the forky build of the same KoeInput version.
+
+    These builds print `dpkg-genchanges: warning: the current version (0.1.0-1~<dist>1) is earlier than the previous one (0.1.0-1)`. This is expected: the local `~<dist>1` entry sits above `-1` on purpose, and `~` sorts before the end of the version.
   - The [debug packages](#debug-packages) go to `target/deb/<dist>/` too.
   - lintian must report no errors and no warnings. Ubuntu 24.04 has an older lintian (2.117), which reports other spelling errors in the binaries than the newer versions that `debian/koeinput.lintian-overrides` was written for. So the noble build skips the `spelling-error-in-binary` check; the comment in `scripts/build-deb` gives the details. The 26.04 lintian output shows the experimental tag `X: spelling-error-in-binary wtH`: the word is bytes of machine code. It has no override, because the override would be unused on Debian, and it does not fail the build.
-- `scripts/test-deb trixie|testing|noble|resolute` runs the [install tests](#install-tests) in a fresh container: `debian:<dist>`, `ubuntu:24.04` or `ubuntu:26.04`. The Ubuntu container images leave out man pages, translations and most documentation, and replace `man` with a stub. The script undoes this first, so the files are installed as on a normal Ubuntu system. The output is also saved in `target/deb/<dist>/test.log`.
+- `scripts/test-deb trixie|forky|sid|noble|resolute` runs the [install tests](#install-tests) in a fresh container: `debian:<dist>`, `ubuntu:24.04` or `ubuntu:26.04`. The Ubuntu container images leave out man pages, translations and most documentation, and replace `man` with a stub. The script undoes this first, so the files are installed as on a normal Ubuntu system. The output is also saved in `target/deb/<dist>/test.log`. `sid` installs the packages from `target/deb/forky/` in `debian:sid` and saves the output in `target/deb/forky/test-sid.log`.
 
 ### New version
 
@@ -470,19 +475,19 @@ A run on a branch can use the caches of `main` and of its own branch. A run on a
 Build and test the packages in the dev container first:
 
 ```sh
-scripts/build-deb testing
-scripts/test-deb testing
+scripts/build-deb forky
+scripts/test-deb forky
 ```
 
 Then, in a terminal on the host, in the repository directory (`~/works/git/nemui/koeinput`):
 
-0. Run `sudo apt update && sudo apt upgrade` first: the testing build needs the current libc6 and fcitx5. Or use the trixie build (`target/deb/trixie/`).
+0. Run `sudo apt update && sudo apt upgrade` first: the forky build needs the current libc6 and fcitx5. On Debian 13, use the trixie build instead (`target/deb/trixie/`, version `0.1.0-1~trixie1`).
 
 1. If you started `koeinput-daemon` by hand in the dev container, stop it in that shell (Ctrl-C), or run `pkill -x koeinput-daemon`. While it runs, it holds the D-Bus name and the installed daemon cannot start.
 2. Install the two packages:
 
    ```sh
-   sudo apt install ./target/deb/testing/koeinput_0.1.0-1_amd64.deb ./target/deb/testing/fcitx5-koeinput_0.1.0-1_amd64.deb
+   sudo apt install ./target/deb/forky/koeinput_0.1.0-1_amd64.deb ./target/deb/forky/fcitx5-koeinput_0.1.0-1_amd64.deb
    ```
 
    apt may say that the download is performed unsandboxed as root. That is harmless for local files. The `-dbgsym` packages in the same directory hold debug symbols; install them only if you need backtraces.
@@ -511,14 +516,14 @@ Then go through the [host check](#host-check).
 Nothing restarts by itself after an upgrade. Install the new packages the same way as in step 2. Unreleased builds keep the same version, and apt reports "already the newest version" and installs nothing for the same version, so add `--reinstall`:
 
 ```sh
-sudo apt install --reinstall ./target/deb/testing/koeinput_0.1.0-1_amd64.deb ./target/deb/testing/fcitx5-koeinput_0.1.0-1_amd64.deb
+sudo apt install --reinstall ./target/deb/forky/koeinput_0.1.0-1_amd64.deb ./target/deb/forky/fcitx5-koeinput_0.1.0-1_amd64.deb
 systemctl --user restart koeinput
 ```
 
 For a released version with a new number, the command is the same without `--reinstall`:
 
 ```sh
-sudo apt install ./target/deb/testing/koeinput_<version>_amd64.deb ./target/deb/testing/fcitx5-koeinput_<version>_amd64.deb
+sudo apt install ./target/deb/forky/koeinput_<version>_amd64.deb ./target/deb/forky/fcitx5-koeinput_<version>_amd64.deb
 systemctl --user restart koeinput
 ```
 

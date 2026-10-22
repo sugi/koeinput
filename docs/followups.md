@@ -19,7 +19,9 @@ Kept with a reason:
 - Some vendored crates contain tests or examples taken from other projects, which are only in the source package and not in the binaries: crossbeam-channel's tests from Go (BSD-3-Clause) and its example under CC-BY-3.0, and ring's test data from BoringSSL and other test suites. `debian/copyright` has paragraphs for the crossbeam-channel files and lists ring's holders, but the vendor tree was not checked file by file. An upload to Debian would need that check, or would leave such files out with `Files-Excluded`.
 - CI runs on every branch push and on pull requests, so a pull request from a branch of this repository runs twice. In a private repository the second run uses Actions minutes; in a public one it costs only time. Drop one trigger if the double runs get in the way.
 - `debian/control` lists `cargo (>= 1.89) | cargo-1.91`. sbuild and Launchpad use only the first alternative, so a Ubuntu 24.04 PPA build would need an Ubuntu-specific `debian/control`.
-- The release workflow pulls base images through `mirror.gcr.io`, which can lag behind floating tags such as `debian:testing` and `archlinux:latest`.
+- The release workflow pulls base images through `mirror.gcr.io`, which can lag behind floating tags such as `debian:forky`, `debian:sid` and `archlinux:latest`.
+- When forky is released, the forky packages stop being the packages for sid, because sid moves on to the next release. Then add a target for the next testing release and test sid on that one.
+- Not checked: whether GitHub renames release files whose names contain `~` (the trixie and Ubuntu packages). GitHub replaces some characters, such as spaces, with `.`. `SHA256SUMS` lists the names before the upload, so check the file names and `sha256sum -c` on the first draft release.
 
 ## M2 (fcitx5 addon)
 

@@ -1,4 +1,4 @@
-FROM docker.io/library/debian:testing
+FROM docker.io/library/debian:forky
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
