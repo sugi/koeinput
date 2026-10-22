@@ -113,14 +113,16 @@ int main() {
         KI_CHECK(panel.preedit().empty());
         KI_CHECK(panel.clientPreedit().empty());
     };
-    // The fake recognizer's partial text is "1"; the panel preedit gets a leading space to set it
-    // apart from the status.
+    // The fake recognizer's partial text is the whole seconds of audio, so the digit depends on
+    // timing; the panel preedit gets a leading space to set it apart from the status.
     auto inPanel = [&](InputContext *context) {
-        KI_CHECK(context->inputPanel().preedit().toString() == " 1");
+        const auto preedit = context->inputPanel().preedit().toString();
+        KI_CHECK(preedit.size() > 1 && preedit[0] == ' ' && preedit[1] != ' ');
         KI_CHECK(context->inputPanel().clientPreedit().empty());
     };
     auto inClient = [&](InputContext *context) {
-        KI_CHECK(context->inputPanel().clientPreedit().toString() == "1");
+        const auto preedit = context->inputPanel().clientPreedit().toString();
+        KI_CHECK(!preedit.empty() && preedit[0] != ' ');
         KI_CHECK(context->inputPanel().preedit().empty());
     };
     std::optional<koeinput::test::DaemonProcess> daemon;
@@ -192,6 +194,7 @@ int main() {
             .then(1400, "hold: partial in the panel preedit, release",
                   [&] {
                       inPanel(ic());
+                      KI_CHECK(ic()->inputPanel().preedit().toString() == " 1");
                       KI_CHECK(send("Alt+Alt_R", true));
                   })
             .then(1500, "hold: committed",
