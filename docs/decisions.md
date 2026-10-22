@@ -158,6 +158,9 @@ Measured on 2026-10-17:
   Apps without preedit support get them in the fcitx5 panel.
 - **Decided** (M4, 2026-10-18): Partial results can move to the fcitx5 panel, for every app or for listed apps, with the "Partial text" setting (see [Quality (M4)](#quality-m4)). The default stays in the app.
   Terminals and Emacs handle inline preedit differently; the host check tells which apps need the list.
+- **Decided** (2026-10-22): Listed apps show `…` plus the end of the partial text, 30 characters by default, with the "Apps that show only the end of partial text" list.
+  Terminals draw preedit on one row and cut it off at the window edge (checked in WezTerm's renderer). The input method cannot make them wrap, and the classic UI panel line is a single line too.
+  The list is empty by default because only WezTerm's name (`org.wezfurlong.wezterm`) was checked.
 - **Open**: Cancel with Esc, a maximum recording length, and what to show when the daemon does not respond.
 - **Open**: Undo of the last commit. It depends on app support for surrounding text.
 

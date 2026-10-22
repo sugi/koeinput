@@ -113,12 +113,16 @@ int main() {
         KI_CHECK(panel.preedit().empty());
         KI_CHECK(panel.clientPreedit().empty());
     };
+    // The fake recognizer's partial text is the whole seconds of audio, so the digit depends on
+    // timing; the panel preedit gets a leading space to set it apart from the status.
     auto inPanel = [&](InputContext *context) {
-        KI_CHECK(!context->inputPanel().preedit().empty());
+        const auto preedit = context->inputPanel().preedit().toString();
+        KI_CHECK(preedit.size() > 1 && preedit[0] == ' ' && preedit[1] != ' ');
         KI_CHECK(context->inputPanel().clientPreedit().empty());
     };
     auto inClient = [&](InputContext *context) {
-        KI_CHECK(!context->inputPanel().clientPreedit().empty());
+        const auto preedit = context->inputPanel().clientPreedit().toString();
+        KI_CHECK(!preedit.empty() && preedit[0] != ' ');
         KI_CHECK(context->inputPanel().preedit().empty());
     };
     std::optional<koeinput::test::DaemonProcess> daemon;
@@ -189,8 +193,8 @@ int main() {
                   })
             .then(1400, "hold: partial in the panel preedit, release",
                   [&] {
-                      KI_CHECK(!ic()->inputPanel().preedit().empty());
-                      KI_CHECK(ic()->inputPanel().clientPreedit().empty());
+                      inPanel(ic());
+                      KI_CHECK(ic()->inputPanel().preedit().toString() == " 1");
                       KI_CHECK(send("Alt+Alt_R", true));
                   })
             .then(1500, "hold: committed",
@@ -210,7 +214,7 @@ int main() {
                   })
             .then(1400, "second context: release",
                   [&] {
-                      KI_CHECK(!ic2()->inputPanel().preedit().empty());
+                      KI_CHECK(ic2()->inputPanel().preedit().toString() == " 1");
                       displayClear(ic());
                       KI_CHECK(sendKey(instance, uuid2, Key("Alt+Alt_R"), true));
                   })
@@ -274,8 +278,7 @@ int main() {
                   })
             .then(1300, "partial: in client preedit, focus out",
                   [&] {
-                      KI_CHECK(!ic()->inputPanel().clientPreedit().empty());
-                      KI_CHECK(ic()->inputPanel().preedit().empty());
+                      inClient(ic());
                       ic()->focusOut();
                   })
             .then(500, "partial: focus out cancelled without a commit",
@@ -288,7 +291,7 @@ int main() {
             .then(0, "partial: press again", [&] { KI_CHECK(send("Alt_R", false)); })
             .then(1300, "partial: in client preedit, release",
                   [&] {
-                      KI_CHECK(!ic()->inputPanel().clientPreedit().empty());
+                      inClient(ic());
                       KI_CHECK(send("Alt+Alt_R", true));
                   })
             .then(1500, "partial: committed",
@@ -402,6 +405,29 @@ int main() {
                       // A key without children loads as an empty list.
                       setOption("PanelApps", "");
                       KI_CHECK(configValue("PanelApps/0") == "<unset>");
+                  })
+            .then(0, "tail list: options load and save, press",
+                  [&] {
+                      KI_CHECK(configValue("TailLength") == "30");
+                      setOption("TailApps/0", " TestApp ");
+                      setOption("TailLength", "10");
+                      KI_CHECK(configValue("TailApps/0") == " TestApp ");
+                      KI_CHECK(configValue("TailLength") == "10");
+                      ic()->setCapabilityFlags(CapabilityFlag::Preedit);
+                      KI_CHECK(send("Alt_R", false));
+                  })
+            .then(1300, "tail list: partial text still in the client preedit",
+                  [&] {
+                      inClient(ic());
+                      cancelSession(uuid);
+                  })
+            .then(1000, "tail list: cancelled",
+                  [&] {
+                      committed(5);
+                      displayClear(ic());
+                      ic()->setCapabilityFlags(CapabilityFlags());
+                      setOption("TailApps", "");
+                      KI_CHECK(configValue("TailApps/0") == "<unset>");
                   })
             .then(0, "plain hotkey: press Control+space",
                   [&] {

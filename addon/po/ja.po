@@ -32,6 +32,12 @@ msgstr "表示しない"
 msgid "Apps that show partial text in the panel"
 msgstr "途中の文字をパネルに出すアプリ"
 
+msgid "Apps that show only the end of partial text"
+msgstr "途中の文字を末尾だけ出すアプリ"
+
+msgid "Characters shown at the end"
+msgstr "末尾だけ出すときの文字数"
+
 msgid "Preparing…"
 msgstr "準備中…"
 

@@ -1,4 +1,5 @@
 #include "koeinput.h"
+#include "tail.h"
 #include <fcitx-config/iniparser.h>
 #include <dbus_public.h>
 #include <notifications_public.h>
@@ -25,6 +26,14 @@ constexpr char kConfPath[] = "conf/koeinput.conf";
 
 // 1 ms: sd-event turns accuracy 0 into its 250 ms default.
 constexpr uint64_t kTimerAccuracyUsec = 1000;
+
+// Names match the context's program case-insensitively; spaces around a name and empty entries are ignored.
+bool appListed(const std::vector<std::string> &apps, const fcitx::InputContext &ic) {
+    return std::any_of(apps.begin(), apps.end(), [&](const std::string &entry) {
+        const std::string app = fcitx::stringutils::trim(entry);
+        return !app.empty() && strcasecmp(app.c_str(), ic.program().c_str()) == 0;
+    });
+}
 
 std::string statusText(Status status) {
     switch (status) {
@@ -149,12 +158,7 @@ void KoeInputAddon::applyConfig() {
 }
 
 KoeInputAddon::PartialTarget KoeInputAddon::partialTarget(const fcitx::InputContext &ic) const {
-    const auto &apps = *config_.panelApps;
-    const bool listed = std::any_of(apps.begin(), apps.end(), [&](const std::string &entry) {
-        const std::string app = fcitx::stringutils::trim(entry);
-        return !app.empty() && strcasecmp(app.c_str(), ic.program().c_str()) == 0;
-    });
-    if (listed) return PartialTarget::Panel;
+    if (appListed(*config_.panelApps, ic)) return PartialTarget::Panel;
     switch (*config_.partialText) {
     case PartialText::Off: return PartialTarget::None;
     case PartialText::Panel: return PartialTarget::Panel;
@@ -163,6 +167,10 @@ KoeInputAddon::PartialTarget KoeInputAddon::partialTarget(const fcitx::InputCont
                                                                           : PartialTarget::Panel;
     }
     return PartialTarget::None;
+}
+
+size_t KoeInputAddon::tailLimit(const fcitx::InputContext &ic) const {
+    return appListed(*config_.tailApps, ic) ? static_cast<size_t>(*config_.tailLength) : 0;
 }
 
 bool KoeInputAddon::eligible(fcitx::InputContext *ic) const {
@@ -201,6 +209,7 @@ bool KoeInputAddon::hotkeyPress(fcitx::KeyEvent &event, uint64_t nowMs, bool fla
     if (controller_.idle()) {
         sessionIc_ = ic->watch();
         partialTarget_ = partialTarget(*ic);
+        tailLimit_ = tailLimit(*ic);
     }
     return controller_.hotkeyPress(nowMs, eligible(ic), isModifierKey(event.key()), flagged);
 }
@@ -382,15 +391,17 @@ void KoeInputAddon::showStatus(Status status) {
 void KoeInputAddon::showPartial(const std::string &text) {
     auto *ic = sessionIc_.get();
     if (!ic || partialTarget_ == PartialTarget::None) return;
+    const std::string shown = tailText(text, tailLimit_);
     if (partialTarget_ == PartialTarget::Client) {
         // DontCommit: fcitx5 would otherwise commit the client preedit on focus out.
-        fcitx::Text preedit(text, fcitx::TextFormatFlags(
+        fcitx::Text preedit(shown, fcitx::TextFormatFlags(
                                       {fcitx::TextFormatFlag::Underline, fcitx::TextFormatFlag::DontCommit}));
-        preedit.setCursor(static_cast<int>(text.size()));
+        preedit.setCursor(static_cast<int>(shown.size()));
         ic->inputPanel().setClientPreedit(preedit);
         ic->updatePreedit();
     } else {
-        ic->inputPanel().setPreedit(fcitx::Text(text));
+        // The classic UI draws aux-up and the preedit with nothing between them.
+        ic->inputPanel().setPreedit(fcitx::Text(" " + shown));
     }
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }

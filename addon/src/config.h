@@ -40,6 +40,10 @@ FCITX_CONFIGURATION(
     fcitx::OptionWithAnnotation<PartialText, PartialTextI18NAnnotation> partialText{
         this, "PartialText", _("Partial text"), PartialText::InApp};
     fcitx::Option<std::vector<std::string>> panelApps{
-        this, "PanelApps", _("Apps that show partial text in the panel"), {}};);
+        this, "PanelApps", _("Apps that show partial text in the panel"), {}};
+    fcitx::Option<std::vector<std::string>> tailApps{
+        this, "TailApps", _("Apps that show only the end of partial text"), {}};
+    fcitx::Option<int, fcitx::IntConstrain> tailLength{
+        this, "TailLength", _("Characters shown at the end"), 30, fcitx::IntConstrain(10, 1000)};);
 
 } // namespace koeinput

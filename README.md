@@ -89,6 +89,7 @@ Open System Settings, then Input Method, then Configure add-ons, then KoeInput (
 - Hotkey, tap mode and the tap threshold (how short a press counts as a tap).
 - Partial text: "In the app" (the default) shows it underlined in the text field, "In the panel" shows it in the fcitx5 panel, "Off" shows only the status.
 - Apps that show partial text in the panel: program names that always use the panel. Use it for apps that commit their own composition when they lose focus, such as Chrome and Discord. To find the name of an app, focus a text field in it and run `fcitx5-diagnose`; in the debug information from D-Bus, the lines with `program:` name the program of each input context.
+- Apps that show only the end of partial text, and Characters shown at the end (30 by default): terminals draw partial text on one row and cut it off at the window edge, so a long text hides its end. For the listed programs, a partial text longer than the set length shows as `…` and its last characters; the `…` counts as one of the set length. The final text is always entered in full. Find the program name as above; for WezTerm it is `org.wezfurlong.wezterm`.
 
 ### Dictionary
 
