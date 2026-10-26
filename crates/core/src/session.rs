@@ -44,7 +44,7 @@ pub struct SessionConfig {
     pub tail: usize,
     pub min_length: usize,
     pub max_length: usize,
-    /// Longest chunk span decoded at once for the final text; 0 = off.
+    /// Most audio of the final text decoded whole, chunk by chunk from the last one; 0 = off.
     pub final_full_max: usize,
     /// Silence between speech segments that starts a new chunk of the final text; 0 = never split.
     pub final_split_silence: usize,
@@ -239,31 +239,50 @@ impl Session {
             .chunk_by(|(a, _), (b, _)| split == 0 || b.start.saturating_sub(a.end) < split)
             .collect();
         let last = chunks.len().saturating_sub(1);
-        chunks
+        let spans: Vec<Segment> = chunks
             .iter()
             .enumerate()
-            .map(|(i, chunk)| {
-                let start = chunk[0].0.start;
-                let end = if i == last {
+            .map(|(i, chunk)| Segment {
+                start: chunk[0].0.start,
+                end: if i == last {
                     self.audio.len()
                 } else {
                     chunk[chunk.len() - 1].0.end
-                };
-                self.chunk_text(chunk, Segment { start, end })
+                },
+            })
+            .collect();
+        let whole = self.decoded_whole(&spans);
+        chunks
+            .iter()
+            .zip(spans)
+            .zip(whole)
+            .map(|((chunk, span), whole)| {
+                if whole {
+                    let rec = self.final_rec.as_deref().unwrap_or(&*self.rec);
+                    self.decode_span(rec, span)
+                } else {
+                    self.join_chunk(chunk)
+                }
             })
             .collect()
     }
 
-    fn chunk_text(
-        &self,
-        segs: &[(Segment, Option<&str>)],
-        span: Segment,
-    ) -> Result<String, RecognizerError> {
-        let max = self.cfg.final_full_max;
-        if max > 0 && span.end.saturating_sub(span.start) <= max {
-            let rec = self.final_rec.as_deref().unwrap_or(&*self.rec);
-            return self.decode_span(rec, span);
+    /// From the last chunk back, each chunk that still fits in what is left of `final_full_max`
+    /// is decoded whole, so the decode time at stop stays bounded for long recordings.
+    fn decoded_whole(&self, spans: &[Segment]) -> Vec<bool> {
+        let mut budget = self.cfg.final_full_max;
+        let mut whole = vec![false; spans.len()];
+        for (w, span) in whole.iter_mut().zip(spans).rev() {
+            let len = span.end.saturating_sub(span.start);
+            if budget > 0 && len <= budget {
+                *w = true;
+                budget -= len;
+            }
         }
+        whole
+    }
+
+    fn join_chunk(&self, segs: &[(Segment, Option<&str>)]) -> Result<String, RecognizerError> {
         let parts = segs
             .iter()
             .map(|(seg, t)| match t {
@@ -1017,6 +1036,54 @@ mod tests {
                     + &sentence(c2.start - PAD, END)
             ]
         );
+    }
+
+    #[test]
+    fn the_latest_chunks_share_the_whole_decode_limit() {
+        let c1 = Segment {
+            start: 5 * S / 2,
+            end: 3 * S,
+        };
+        // Still open when the recording stops.
+        let c2 = Segment {
+            start: 7 * S / 2,
+            end: 5 * S,
+        };
+        let spans = [A.end - A.start, c1.end - c1.start, END - c2.start];
+        let latest_two = spans[1] + spans[2];
+        assert!(spans.iter().all(|&n| n < latest_two), "each fits alone");
+        let run = |final_full_max| {
+            let cfg = SessionConfig {
+                final_full_max,
+                ..split_at(c2.start - c1.end)
+            };
+            speak_and_stop_with(cfg, vec![A, c1, c2], never, None)
+        };
+        let expected = sentence(A.start - PAD, A.end + PAD)
+            + &sentence(c1.start - PAD, c1.end + PAD)
+            + &sentence(c2.start - PAD, END);
+
+        let fits_all = run(spans.iter().sum());
+        assert_eq!(
+            fits_all.final_spans,
+            vec![
+                (A.start - PAD, A.end + PAD),
+                (c1.start - PAD, c1.end + PAD),
+                (c2.start - PAD, END)
+            ]
+        );
+        assert_eq!(finals(&fits_all.after_stop), vec![expected.clone()]);
+
+        let fits_two = run(latest_two + spans[0] - 1);
+        assert_eq!(
+            fits_two.final_spans,
+            vec![(c1.start - PAD, c1.end + PAD), (c2.start - PAD, END)]
+        );
+        assert_eq!(finals(&fits_two.after_stop), vec![expected.clone()]);
+
+        let fits_last = run(latest_two - 1);
+        assert_eq!(fits_last.final_spans, vec![(c2.start - PAD, END)]);
+        assert_eq!(finals(&fits_last.after_stop), vec![expected]);
     }
 
     #[test]
