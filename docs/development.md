@@ -50,6 +50,10 @@ scripts/dev cargo clippy --workspace --all-targets -- -D warnings
 - The microphone path cannot be tested through `scripts/dev`: the build container has no PulseAudio socket. Test it by hand with `koeinput listen` in the outer dev container (see below).
 - The capture test `records_from_default_source_when_enabled` (`KOEINPUT_AUDIO_TESTS=1`) is not runnable through `scripts/dev`: it needs a real sound server, and other tests set `PULSE_SERVER` for the whole process. Treat it as unsupported until a dedicated runner exists.
 - `tools/measure-m4` measures accuracy and latency on the evaluation recordings in `work/eval-data/`, also under CPU load. It is a developer tool, not packaged. How to run it and the last results: [m4-results.md](m4-results.md).
+  - The modes `split600`, `split800` and `split1000` (8 threads, no load) and `load-split800` (8 threads, under load) set `final_split_silence_ms`. The older modes pin it to `0`, so they still measure one decode of the whole utterance.
+  - The summary has two more columns: the sentence ends found in the read sentences, and the `？` inside free speech.
+  - The script also writes `compare.md` in the output directory (mode 0600): the final text of every mode side by side. It holds recognized text, so never commit or quote it.
+  - Results of the split modes: [punctuation-results.md](punctuation-results.md).
 
 ## Run the daemon in the dev container
 
@@ -87,10 +91,11 @@ Use `--from-file` to install from an archive you already downloaded.
 
 ## Final text
 
-The final text comes from one decode of the whole utterance, from the start of the first speech to the end of the recording, when that span is at most `final_full_max_ms` (default 30000, so 30 s).
-Longer recordings join the texts of the VAD segments instead, as the partial text does.
+The final text is decoded per chunk. The VAD segments are grouped into chunks: a gap of at least `final_split_silence_ms` (default 800) between two segments starts a new chunk, and `0` never splits.
+Each chunk is decoded again as one piece, and the model puts `。` or `？` at its end. Dictionary, fillers and punctuation rules run per chunk.
+`final_full_max_ms` (default 30000, so 30 s) is a total budget for these decodes in one utterance. The latest chunks use it first. A chunk that does not fit in what is left joins the texts of its VAD segments instead, as the partial text does.
 `final_full_max_ms = 0` in `~/.config/koeinput/config.toml` always joins the segments.
-The measurement behind the default is in [m4-results.md](m4-results.md).
+The measurements behind the defaults are in [m4-results.md](m4-results.md) and [punctuation-results.md](punctuation-results.md).
 
 ### A second model for the final text
 
@@ -105,7 +110,7 @@ koeinput model use --final none     # back to one model
 
 - `model use --final` writes `final_model` into the config file. It installs nothing, and it refuses the main model.
 - The daemon loads the final-stage model after the main model. Dictation works as soon as the main model is loaded; until the second model is loaded too, the main model decodes the final text.
-- The final-stage model decodes only a whole utterance. Over the `final_full_max_ms` limit, the main model's segment texts are joined, because decoding every segment again with the slow model would delay the final text by seconds. With `final_full_max_ms = 0` the daemon does not load it at all.
+- The final-stage model decodes only whole chunks. Over the `final_full_max_ms` budget, the main model's segment texts are joined, because decoding every segment again with the slow model would delay the final text by seconds. With `final_full_max_ms = 0` the daemon does not load it at all.
 - If it fails to load, the daemon logs the error to the journal and works with the main model only.
 - `koeinput status` prints a `final model:` line with `ready`, or `not loaded yet or failed` and a pointer to the journal. `model list` marks it with `final model`.
 

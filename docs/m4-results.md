@@ -1,5 +1,7 @@
 # M4 measurement results
 
+This is a record of 2026-10-18. The final text has changed since: see [punctuation-results.md](punctuation-results.md).
+
 Date: 2026-10-18. Raw outputs are in `work/results/m4/` (not in git). This file has aggregate numbers only.
 
 The measurement checks the M4 changes to the final text and sets the defaults from the results.
