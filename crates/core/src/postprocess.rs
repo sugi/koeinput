@@ -5,6 +5,15 @@ use std::sync::LazyLock;
 static ARTEFACT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:language\s+[A-Za-z]+\s*)?</?asr_text>|<\|[^|>]*\|>").unwrap());
 
+static POLITE_QUESTION_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:です|ます|ません|ました|でした|でしょう|ましょう)か$").unwrap()
+});
+
+static POLITE_STATEMENT_END: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:です|ます|ました|でした|ません|ください)$").unwrap());
+
+const SENTENCE_END_MARKS: [char; 9] = ['。', '．', '.', '？', '?', '！', '!', '、', ','];
+
 const FILLERS: [&str; 8] = [
     "えーっと",
     "えーと",
@@ -35,7 +44,8 @@ impl PostProcessor {
         let t = ARTEFACT.replace_all(text, "");
         let t = self.replace_dictionary(&t);
         let t = remove_fillers(&t);
-        remove_japanese_spaces(&t)
+        let t = full_width_marks(&t);
+        close_polite_endings(&remove_japanese_spaces(&t))
     }
 
     fn replace_dictionary(&self, text: &str) -> String {
@@ -110,6 +120,60 @@ fn remove_japanese_spaces(text: &str) -> String {
         out.push(c);
     }
     out
+}
+
+fn full_width_marks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let after_japanese = || {
+            out.chars()
+                .rev()
+                .find(|c| !is_space(*c))
+                .is_some_and(is_japanese)
+        };
+        let mapped = match c {
+            '?' if after_japanese() => '？',
+            '!' if after_japanese() => '！',
+            _ => c,
+        };
+        out.push(mapped);
+    }
+    out
+}
+
+/// `すみません、` opens a sentence, so its `、` is a real comma.
+fn is_apology_opener(text: &str) -> bool {
+    text.ends_with("すみません") || text.ends_with("すいません")
+}
+
+fn close_polite_endings(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let mark = match c {
+            '。' | '、' if POLITE_QUESTION_END.is_match(&out) => '？',
+            '、' if POLITE_STATEMENT_END.is_match(&out) && !is_apology_opener(&out) => '。',
+            _ => c,
+        };
+        out.push(mark);
+    }
+    out
+}
+
+/// Closes a chunk of the final text with `？` after a polite question ending and `。` otherwise,
+/// unless it already ends in punctuation.
+pub fn end_sentence(text: &str) -> String {
+    let Some(last) = text.chars().last() else {
+        return String::new();
+    };
+    if SENTENCE_END_MARKS.contains(&last) {
+        return text.to_string();
+    }
+    let mark = if POLITE_QUESTION_END.is_match(text) {
+        '？'
+    } else {
+        '。'
+    };
+    format!("{text}{mark}")
 }
 
 pub fn join_segments(parts: &[String]) -> String {
@@ -425,6 +489,103 @@ mod tests {
     fn order_dictionary_before_fillers() {
         let p = pp(&[("えーと", "ETO")]);
         assert_eq!(p.apply("えーと"), "ETO");
+    }
+
+    #[test]
+    fn full_width_question_and_exclamation_after_japanese() {
+        let p = PostProcessor::empty();
+        assert_eq!(p.apply("本当?"), "本当？");
+        assert_eq!(p.apply("すごい!"), "すごい！");
+        assert_eq!(p.apply("本当 ?"), "本当？");
+        assert_eq!(p.apply("ますか ?"), "ますか？");
+        assert_eq!(p.apply("ますか 。"), "ますか？");
+        assert_eq!(p.apply("Is it OK ?"), "Is it OK ?");
+        assert_eq!(p.apply("Is it OK?"), "Is it OK?");
+        assert_eq!(p.apply("Wow!"), "Wow!");
+    }
+
+    #[test]
+    fn polite_question_ending_takes_a_question_mark_instead_of_a_period() {
+        let p = PostProcessor::empty();
+        assert_eq!(p.apply("これでいいですか。"), "これでいいですか？");
+        assert_eq!(
+            p.apply("行きましょうか。次です。"),
+            "行きましょうか？次です。"
+        );
+        assert_eq!(p.apply("ますか?"), "ますか？");
+        assert_eq!(p.apply("そうですかね。"), "そうですかね。");
+        assert_eq!(p.apply("そうか。"), "そうか。");
+    }
+
+    #[test]
+    fn comma_after_a_polite_ending_becomes_a_sentence_end() {
+        let p = PostProcessor::empty();
+        assert_eq!(p.apply("行きます、明日も"), "行きます。明日も");
+        assert_eq!(p.apply("お願いします、"), "お願いします。");
+        assert_eq!(p.apply("してください、"), "してください。");
+        for (from, to) in [
+            ("です、", "です。"),
+            ("ました、", "ました。"),
+            ("でした、", "でした。"),
+            ("ません、", "ません。"),
+        ] {
+            assert_eq!(p.apply(from), to);
+        }
+        assert_eq!(p.apply("わかりません、次"), "わかりません。次");
+        assert_eq!(p.apply("すみません、ちょっと"), "すみません、ちょっと");
+        assert_eq!(p.apply("すいません、"), "すいません、");
+        assert_eq!(p.apply("ますか、"), "ますか？");
+        assert_eq!(p.apply("でしょうか、次"), "でしょうか？次");
+        assert_eq!(p.apply("ませんか、"), "ませんか？");
+        assert_eq!(p.apply("します 、次"), "します。次");
+        for kept in [
+            "ますが、",
+            "ですね、",
+            "そうか、",
+            "ましょう、",
+            "だ、",
+            "です,",
+        ] {
+            assert_eq!(p.apply(kept), kept);
+        }
+        assert_eq!(end_sentence(&p.apply("してください、")), "してください。");
+    }
+
+    #[test]
+    fn end_sentence_adds_the_mark_a_chunk_lacks() {
+        assert_eq!(end_sentence(""), "");
+        assert_eq!(end_sentence("そうか"), "そうか。");
+        assert_eq!(end_sentence("git worktree"), "git worktree。");
+        assert_eq!(end_sentence("version 2"), "version 2。");
+        assert_eq!(end_sentence("ですかね"), "ですかね。");
+        for q in [
+            "です",
+            "ます",
+            "ません",
+            "ました",
+            "でした",
+            "でしょう",
+            "ましょう",
+        ] {
+            assert_eq!(end_sentence(&format!("{q}か")), format!("{q}か？"));
+        }
+    }
+
+    #[test]
+    fn end_sentence_keeps_a_text_that_ends_in_punctuation() {
+        for t in [
+            "終わり。",
+            "終わり．",
+            "end.",
+            "本当？",
+            "really?",
+            "すごい！",
+            "wow!",
+            "ええと、",
+            "so,",
+        ] {
+            assert_eq!(end_sentence(t), t);
+        }
     }
 
     #[test]

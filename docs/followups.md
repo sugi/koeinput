@@ -7,8 +7,10 @@ Each item names the milestone it belongs to.
 
 Kept with a reason:
 
-- Recordings longer than `final_full_max_ms` (30 s) still join the segment texts. There, a pause can still put a `。` in the middle of a sentence, and Silero's 20 s maximum speech length can still split a word. Partial text always comes from the segments. A higher limit would push the final latency under load past the 2 s target ([m4-results.md](m4-results.md)).
-- Decoding a whole utterance, parakeet-ja puts no `。` inside the text, even where a sentence really ends (none of the 3 sentence ends inside the read sentences). The final-stage model `cohere-transcribe` placed all 3. This is the model's punctuation, not a rule we can fix after recognition.
+- `final_full_max_ms` (30 s) is a total budget for the whole-chunk decodes in one utterance, used by the latest chunks first. In a recording longer than the budget, the older chunks join their segment texts, and there a pause can still put a `。` in the middle of a sentence, and Silero's 20 s maximum speech length can still split a word. Partial text always comes from the segments. A higher limit would push the final latency under load past the 2 s target ([m4-results.md](m4-results.md)).
+- Decoding one chunk, parakeet-ja still puts no `。` inside it, even where a sentence really ends. The split at pauses works around this ([punctuation-results.md](punctuation-results.md)). The read sentences were read in one breath, so with 800 ms the split found 0 of their 3 sentence ends (600 ms found 2 of 3), and a sentence end without a pause stays without `。`. The final-stage model `cohere-transcribe` placed all 3 in the M4 measurement, but it was not measured with the split.
+- The final-stage model (`cohere-transcribe`) was not measured with the split. It now runs once per chunk, so an utterance with several chunks may take longer than the 2.2 s p90 for one decode ([m4-results.md](m4-results.md)).
+- A pause where the speaker stops to think can put a `。` in the middle of a sentence, for example after a clause that ends in `が`. With 800 ms, about 2 of the 13 `。` inside the free speech were of this kind, and 2 more came after a short filler word. A higher threshold (1000 ms) misses real sentence ends, so the default stays. A rule on the following text could fix some of these; it was not tried.
 - Model download: a download that stalls mid-body hangs `koeinput model install`. There is no idle timeout, and ureq 3 has no per-read timeout. Ctrl-C stops it, and the install is atomic, so a stalled download leaves no half-installed model.
 - Addon and daemon: a `Stop` or `Cancel` that the addon sends in the few milliseconds between the daemon losing its bus name and the addon seeing `NameOwnerChanged` can make the bus start a new daemon (D-Bus activation). Such calls should carry the `NO_AUTO_START` flag, but fcitx5's D-Bus API has no portable way to set it, and the window is milliseconds.
 - Addon and daemon: the addon ends a session when `Final` arrives, but the daemon frees the session only when it sends the `done` state right after. A hotkey press in that gap (normally under a millisecond) gets `Busy`. The fix would be for the daemon to free the session before it sends `Final` or `Error`, which changes the order clients see.
@@ -38,6 +40,10 @@ Kept with a reason:
   - The held evidence assumes the frontend's modifier bits: `keySymToStates` maps Hyper_L to Mod4 in fcitx5 5.1 but Mod3 in 5.0, and Mode_switch under `grp:switch` may not set Mod5. A wrong assumption loses a chord (the second hotkey becomes an ordinary hotkey press); it never leaves a stuck key.
 
 ## Done
+
+### 2026-10-27
+
+- Sentence punctuation: the final text is decoded per chunk between longer pauses, with end marks and punctuation rules. Free speech went from 1 `。` inside the text to 13, about 7 of them at real sentence ends ([punctuation-results.md](punctuation-results.md)).
 
 ### 2026-10-18
 

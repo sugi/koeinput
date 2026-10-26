@@ -22,6 +22,7 @@ Decisions themselves live in [decisions.md](decisions.md).
 | [models.md](models.md) | Origin and license of every catalog model |
 | [spike-results.md](spike-results.md) | Model comparison on the user's own recordings (M0) |
 | [m4-results.md](m4-results.md) | Measurement of the M4 changes and of latency under CPU load |
+| [punctuation-results.md](punctuation-results.md) | Measurement of the sentence breaks in the final text (split at pauses, end marks) |
 | [development.md](development.md) | How to build, test, package and run, and how to install on the host |
 | [followups.md](followups.md) | Review findings deliberately left for later milestones |
 
@@ -62,11 +63,21 @@ Spec: [M5 spec](superpowers/specs/2026-10-18-m5-release-design.md).
 - `README.md` and `README.ja.md` for users; [models.md](models.md) with the CC-BY-4.0 attribution of the default model; [release.md](release.md) with the release steps.
 - The private GitHub repository `sugi/koeinput`. `ci.yml` runs on every push and pull request; `release.yml` builds and tests all six targets on a `v*` tag or by hand, and makes a draft release only on a tag. No tag has been pushed.
 
+## Sentence punctuation
+
+Decisions are in [decisions.md](decisions.md#sentence-punctuation), numbers in [punctuation-results.md](punctuation-results.md).
+
+- The final text is decoded per chunk. A pause of at least `final_split_silence_ms` (default 800, `0` turns it off) starts a new chunk, and each chunk ends with `。` or `？`. `final_full_max_ms` (30 s) is now a total budget for these decodes in one utterance, used by the latest chunks first.
+- Punctuation rules: half-width `?` and `!` after Japanese become full width, and a `、` after a polite ending becomes `。` or `？`. `！` only comes from the model.
+- On the user's recordings, CER stays at 27.7% and free speech has 13 `。` inside the text instead of 1, about 7 of them at real sentence ends. Final p90 is 0.55 s without load and about 1.3 s with the tail under load.
+- Open: a pause where the speaker stops to think can put a `。` in the middle of a sentence ([followups.md](followups.md)).
+- `tools/measure-m4` has new modes for this (see [punctuation-results.md](punctuation-results.md#how-to-run-it-again)).
+
 ## M4: Quality
 
 Spec: [M4 spec](superpowers/specs/2026-10-18-m4-quality-design.md). Decisions are in [decisions.md](decisions.md#quality-m4), numbers in [m4-results.md](m4-results.md).
 
-- The final text comes from one decode of the whole utterance (up to `final_full_max_ms`, 30 s). On the user's recordings this removed the `。` at pause points, kept the CER (27.8% against 27.7%) and kept the final p90 under 1 s, also under build load.
+- The final text came from one decode of the whole utterance (up to `final_full_max_ms`, 30 s). On the user's recordings this removed the `。` at pause points, kept the CER (27.8% against 27.7%) and kept the final p90 under 1 s, also under build load. Later, the sentence punctuation change replaced this: the final text is decoded per chunk between pauses of 800 ms or more, see the Sentence punctuation section.
 - An optional final-stage model: `koeinput model use cohere-transcribe --final`. It is more accurate (CER 23.2%) but slower (final p90 2.2 s, 3.9 s under load) and needs 4.4 GiB, so it stays off by default; the user decides.
 - `koeinput dict add/remove/list`; the daemon reloads the dictionary at the next session.
 - The addon's "Partial text" setting (in the app, in the panel, off) and a list of apps that always use the panel. Key releases pair with their presses by keycode.

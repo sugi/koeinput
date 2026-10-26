@@ -3,13 +3,15 @@
 
 Runs `koeinput transcribe` (release build) over the items of work/eval-data/references.jsonl
 in several modes and writes summary.md with aggregate numbers only.
-The raw outputs contain recognized text. They stay in the output directory (mode 0700) and
-must never be committed, quoted or copied into documents.
+The raw outputs and compare.md (the final text of every mode side by side, mode 0600) contain
+recognized text. They stay in the output directory (mode 0700) and must never be committed,
+quoted or copied into documents.
 
 Usage: tools/measure-m4 [--work DIR] [--out DIR] [--bin KOEINPUT] [--modes a,b,...] [--score-only]
 
 Run it in the outer dev container, not through scripts/dev, so that the recognizer runs at
-normal priority while the load (when a mode asks for it) runs at nice 10.
+normal priority while the load (when a mode asks for it) runs at nice 10. If this script is itself started
+under `nice`, both move up by that amount (the load is capped at 19).
 The measurement HOME (work/home) needs parakeet-ja and silero-vad; the cohere modes also need
 cohere-transcribe (`koeinput model install cohere-transcribe --from-file <archive>`).
 """
@@ -35,19 +37,26 @@ BOUNDARY_TOLERANCE = 2
 SENTENCE_ENDS = "。！？!?．"
 MARK_BASE = 0xE010
 
+# Modes before the split threshold existed are pinned to the old behavior (one decode of the whole utterance).
+NO_SPLIT = {"final_split_silence_ms": 0}
+
 # name: (config keys, threads, CPU load, uses the filler-marking dictionary)
 MODES = {
-    "join": ({"final_full_max_ms": 0}, 8, False, False),
-    "whole": ({}, 8, False, False),
-    "cohere": ({"final_model": "cohere-transcribe"}, 8, False, False),
-    "idle-t4": ({}, 4, False, False),
-    "idle-t16": ({}, 16, False, False),
-    "load-t4": ({}, 4, True, False),
-    "load-t8": ({}, 8, True, False),
-    "load-t16": ({}, 16, True, False),
-    "load-cohere": ({"final_model": "cohere-transcribe"}, 8, True, False),
-    "fillers-whole": ({}, 8, False, True),
-    "fillers-cohere": ({"final_model": "cohere-transcribe"}, 8, False, True),
+    "join": ({**NO_SPLIT, "final_full_max_ms": 0}, 8, False, False),
+    "whole": (NO_SPLIT, 8, False, False),
+    "cohere": ({**NO_SPLIT, "final_model": "cohere-transcribe"}, 8, False, False),
+    "idle-t4": (NO_SPLIT, 4, False, False),
+    "idle-t16": (NO_SPLIT, 16, False, False),
+    "load-t4": (NO_SPLIT, 4, True, False),
+    "load-t8": (NO_SPLIT, 8, True, False),
+    "load-t16": (NO_SPLIT, 16, True, False),
+    "load-cohere": ({**NO_SPLIT, "final_model": "cohere-transcribe"}, 8, True, False),
+    "fillers-whole": (NO_SPLIT, 8, False, True),
+    "fillers-cohere": ({**NO_SPLIT, "final_model": "cohere-transcribe"}, 8, False, True),
+    "split600": ({"final_split_silence_ms": 600}, 8, False, False),
+    "split800": ({"final_split_silence_ms": 800}, 8, False, False),
+    "split1000": ({"final_split_silence_ms": 1000}, 8, False, False),
+    "load-split800": ({"final_split_silence_ms": 800}, 8, True, False),
 }
 NEEDS = {name: "cohere-transcribe" for name in MODES if "cohere" in name}
 
@@ -137,9 +146,20 @@ def mid_sentence_periods(ref, hyp):
     return inner, mid
 
 
-def inner_periods(hyp):
+def sentence_ends_found(ref, hyp):
+    """(found, total): reference sentence ends inside the text (not the last) that have a hyp sentence end nearby."""
+    rn, hn = norm(ref), norm(hyp)
+    _, spans = align(rn, hn)
+    ref_ends = {b for b in boundaries(ref, SENTENCE_ENDS) if 0 < b < len(rn)}
+    spans_at_ends = [spans.get(k, [0, len(rn)]) for k in boundaries(hyp, SENTENCE_ENDS) if k < len(hn)]
+    found = sum(1 for b in ref_ends
+                if any(lo - BOUNDARY_TOLERANCE <= b <= hi + BOUNDARY_TOLERANCE for lo, hi in spans_at_ends))
+    return found, len(ref_ends)
+
+
+def inner_periods(hyp, chars="。"):
     hn = norm(hyp)
-    return sum(1 for k in boundaries(hyp, "。") if k < len(hn))
+    return sum(1 for k in boundaries(hyp, chars) if k < len(hn))
 
 
 def pctl(values, q):
@@ -311,10 +331,12 @@ def score(rows, refs):
     script = [i for i in rows if kind(i) == "script"]
     speech = [i for i in rows if kind(i) != "noise"]
     pairs = [(norm(refs[i]["reference"]), norm(rows[i]["text"])) for i in script]
-    inner = mid = mid_items = 0
+    inner = mid = mid_items = ends_found = ends_total = 0
     for i in script:
         a, b = mid_sentence_periods(refs[i]["reference"], rows[i]["text"])
         inner, mid, mid_items = inner + a, mid + b, mid_items + (b > 0)
+        f, t = sentence_ends_found(refs[i]["reference"], rows[i]["text"])
+        ends_found, ends_total = ends_found + f, ends_total + t
     finals = [rows[i]["final_s"] for i in speech]
     intervals = []
     for i in speech:
@@ -325,10 +347,11 @@ def score(rows, refs):
     free = [i for i in rows if kind(i) == "free"]
     return dict(
         cer=cer_with_ci(pairs), n_script=len(script), n_speech=len(speech),
-        inner=inner, mid=mid, mid_items=mid_items,
+        inner=inner, mid=mid, mid_items=mid_items, ends_found=ends_found, ends_total=ends_total,
         final_p50=pctl(finals, 50), final_p90=pctl(finals, 90), final_max=max(finals, default=None),
         interval_p50=pctl(intervals, 50), interval_p90=pctl(intervals, 90), n_intervals=len(intervals),
         free_inner=sum(inner_periods(rows[i]["text"]) for i in free), n_free=len(free),
+        free_questions=sum(inner_periods(rows[i]["text"], "？?") for i in free),
         noise_text=sum(1 for i in rows if kind(i) == "noise" and norm(rows[i]["text"])),
         n_noise=sum(1 for i in rows if kind(i) == "noise"),
     )
@@ -407,23 +430,26 @@ def summary(out, refs, fillers):
           f"{sum(1 for r in refs.values() if r['kind'] == 'noise')} noise. "
           f"CPUs: {len(os.sched_getaffinity(0))}. First run finished: {any_meta.get('date', 'n/a')}.", ""]
     L += ["## Final text (no load)", "",
-          "| Mode | threads | CER (95% CI) | inner 。 | mid-sentence 。 (items) | final p50 | final p90 | final max | free items: inner 。 | noise items with text | peak RSS |",
-          "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for name in ("join", "whole", "cohere", "idle-t4", "idle-t16"):
+          "| Mode | threads | CER (95% CI) | inner 。 | mid-sentence 。 (items) | sentence ends found | final p50 | final p90 | final max | free items: inner 。 | free items: inner ？ | noise items with text | peak RSS |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name in ("join", "whole", "cohere", "idle-t4", "idle-t16", "split600", "split800", "split1000"):
         if name not in scores:
             continue
         s, m = scores[name], metas[name]
         cer = s["cer"]
         cer_s = f"{cer[0] * 100:.1f}% ({cer[1] * 100:.0f}–{cer[2] * 100:.0f})" if cer else "n/a"
         L.append(f"| {name} | {m['threads']} | {cer_s} | {s['inner']} | {s['mid']} ({s['mid_items']}/{s['n_script']}) | "
+                 f"{s['ends_found']}/{s['ends_total']} | "
                  f"{f2(s['final_p50'], ' s')} | {f2(s['final_p90'], ' s')} | {f2(s['final_max'], ' s')} | "
-                 f"{s['free_inner']} ({s['n_free']} items) | {s['noise_text']}/{s['n_noise']} | "
+                 f"{s['free_inner']} ({s['n_free']} items) | {s['free_questions']} | "
+                 f"{s['noise_text']}/{s['n_noise']} | "
                  f"{rss_gib(m)} |")
     L += ["", "## Threads, with and without load", "",
-          "Load: one busy loop per CPU at nice 10, the recognizer at nice 0.", "",
+          "Load: one busy loop per CPU at nice 10, the recognizer at nice 0. If the script is started under `nice`, both move up by that amount (the load is capped at 19).", "",
           "| Mode | threads | load | final p50 | final p90 | final max | partial interval p50 | partial interval p90 | CER |",
           "|---|---|---|---|---|---|---|---|---|"]
-    for name in ("idle-t4", "whole", "idle-t16", "load-t4", "load-t8", "load-t16", "cohere", "load-cohere"):
+    for name in ("idle-t4", "whole", "idle-t16", "load-t4", "load-t8", "load-t16", "cohere", "load-cohere",
+                 "split800", "load-split800"):
         if name not in scores:
             continue
         s, m = scores[name], metas[name]
@@ -459,6 +485,10 @@ def summary(out, refs, fillers):
           "corpus CER with a 1000-sample item bootstrap.",
           "- Inner 。: a `。` with more text after it. Mid-sentence 。: an inner `。` whose aligned position in the "
           f"reference is more than {BOUNDARY_TOLERANCE} characters from any sentence end of the reference.",
+          "- Sentence ends found: of the sentence ends inside a read-script reference (all but the last one), how many "
+          f"have a sentence end (`。！？!?．`) of the text within {BOUNDARY_TOLERANCE} characters after alignment. "
+          "Free items: inner ？ counts `？` or `?` with more text after it.",
+          "- The split modes set final_split_silence_ms; every other mode sets it to 0 (one decode, as M4 measured).",
           "- Final latency: the time `koeinput transcribe` reports after the end of the audio, over read-script and "
           "free-speech items (noise items left out, as in the spike). The daemon adds the 250 ms tail before it.",
           "- Partial interval: max(0.5 s, wall time between two consecutive partial results one 0.5 s tick apart); "
@@ -468,6 +498,22 @@ def summary(out, refs, fillers):
     text = "\n".join(L) + "\n"
     (out / "summary.md").write_text(text, encoding="utf-8")
     return text
+
+
+def write_compare(out, refs):
+    """Final text of every mode that ran, per free-speech and read item. Recognized text: mode 0600, never commit or quote."""
+    modes = {name: rows for name in MODES if (rows := load_rows(out, name)[0])}
+    L = ["# Final text side by side (private: recognized text, never commit or quote)", ""]
+    for i in sorted(refs):
+        if refs[i]["kind"] == "noise" or not any(i in rows for rows in modes.values()):
+            continue
+        L += [f"## {i} ({refs[i]['kind']})", ""]
+        L += [f"- {name}: {rows[i]['text']}" for name, rows in modes.items() if i in rows]
+        L.append("")
+    fd = os.open(out / "compare.md", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(L) + "\n")
 
 
 def main():
@@ -506,6 +552,7 @@ def main():
         finally:
             load.stop()
     print(summary(args.out, refs, fillers))
+    write_compare(args.out, refs)
 
 
 if __name__ == "__main__":

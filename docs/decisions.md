@@ -294,7 +294,7 @@ Decided for M3 on 2026-10-18 (details in [the M3 spec](superpowers/specs/2026-10
 
 Decided for M4 on 2026-10-18 (details in [the M4 spec](superpowers/specs/2026-10-18-m4-quality-design.md), numbers in [m4-results.md](m4-results.md)):
 
-- **Decided**: The final text comes from one decode of the whole utterance, from the first speech to the end of the recording, when that span is at most `final_full_max_ms`. Longer recordings join the segment texts as before. The default stays at 30000 (30 s), as measured on the user's recordings:
+- **Decided** (replaced by [Sentence punctuation](#sentence-punctuation)): The final text comes from one decode of the whole utterance, from the first speech to the end of the recording, when that span is at most `final_full_max_ms`. Longer recordings join the segment texts as before. The default stays at 30000 (30 s), as measured on the user's recordings:
   - accuracy is the same: 256 character errors against 255 with the segment join, out of 920 reference characters (CER 27.8% and 27.7%);
   - for recordings up to 30 s, the `。` in the middle of a sentence is gone: 1 in the 25 read sentences before, 0 after. In free speech, the `。` inside the text went from 4 to 1, and that one is in the only recording longer than 30 s, which still uses the segment join;
   - it costs time: final p90 0.41 s instead of 0.02 s without load, 0.78 s with every CPU busy. With the 250 ms tail that is about 1 s, within the 2 s target. The decode time grows with the length (1.05 s for a 22 s recording under load), so a 60 s limit would likely miss the target under load; the limit stays at 30 s.
@@ -303,6 +303,21 @@ Decided for M4 on 2026-10-18 (details in [the M4 spec](superpowers/specs/2026-10
 - **Decided**: The filler rule stays as it is. In the outputs it matched only twice, both えっと in free speech, at the start of a phrase. It removed nothing from the read sentences, and no reference contains a filler string.
 - **Decided**: The dictionary gets `koeinput dict add/remove/list`, and the daemon reloads the file at the next session after it changed, so no restart is needed.
 - **Decided**: The addon setting "Partial text" chooses between the app (the default), the fcitx5 panel, and off. A second setting lists apps that always use the panel. This answers the open item about the panel; which apps need the list comes from the host check.
+
+## Sentence punctuation
+
+Decided on 2026-10-27, after the M4 measurement showed that a whole-utterance decode leaves no `。` inside the text (numbers in [punctuation-results.md](punctuation-results.md)).
+This replaces the M4 decision of one decode of the whole utterance.
+
+- **Decided**: At the end of a recording, the VAD segments are grouped into chunks. A gap of at least `final_split_silence_ms` between two segments starts a new chunk. Each chunk is decoded again as one piece, by the final-stage model when one is set and otherwise by the default model. The model puts its own `。` or `？` at the end of a chunk. `final_split_silence_ms = 0` never splits, which gives the M4 behavior of one decode.
+- **Decided**: `final_split_silence_ms` defaults to 800. On the user's recordings, 600 put more `。` in the middle of sentences, and 1000 missed real sentence ends that 800 found. Final p90 stays about 0.55 s without load. With the 250 ms tail, 800 under load is about 1.3 s at p90, inside the 2 s target. CER is the same in every mode (27.7% to 27.8%).
+- **Decided**: `final_full_max_ms` is now a total budget (default 30 s) for the whole-chunk decodes in one utterance. The latest chunks use it first. A chunk that does not fit in what is left joins its VAD segment texts instead. In a long dictation the last 30 s or so get the better decode and the older part uses the segment texts. This keeps the final latency bounded.
+- **Decided** (the user's choice): Every chunk end gets an end mark, including the end of the whole text. It is `？` after a polite question ending (`です` `ます` `ません` `ました` `でした` `でしょう` `ましょう`, each followed by `か`), and `。` otherwise. A chunk that already ends in `。` `．` `.` `？` `?` `！` `!` `、` or `,` gets nothing added. Short Latin-only text also gets `。`, so `git worktree` becomes `git worktree。`.
+- **Decided**: A half-width `?` or `!` right after Japanese becomes `？` or `！`, and a `。` right after a polite question ending becomes `？`.
+- **Decided**: A `、` directly after `です` `ます` `ました` `でした` `ません` or `ください` becomes `。`. Directly after a polite question ending it becomes `？`. This also applies to the partial text. `ますが、` `ですね、` and a half-width `,` stay as they are. So does the `、` after `すみません` or `すいません`, a common opener where it is a real comma. In the free speech the model wrote `、` at real sentence ends after polite forms. All 3 cases this rule changed in free speech (with 800) are real sentence ends, and none appeared in the read sentences.
+- **Decided**: `！` only comes from the model. No rule adds it.
+- **Decided**: Post-processing (dictionary, fillers, punctuation rules) runs per chunk. A dictionary key that spans a long pause no longer matches.
+- **Accepted**: A pause where the speaker stops to think can still put a `。` in the middle of a sentence. With 800 on the free speech, about 2 of the 13 `。` were of this kind. See [followups.md](followups.md).
 
 ## License and hosting
 
