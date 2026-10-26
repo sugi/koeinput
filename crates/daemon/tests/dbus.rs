@@ -359,6 +359,12 @@ async fn dictate(p: &Recognizer1Proxy<'_>) -> (Vec<String>, String) {
     (texts, a.text.clone())
 }
 
+/// The fake main recognizer's final text: whole seconds of audio, closed as a sentence.
+fn is_fake_seconds(text: &str) -> bool {
+    text.strip_suffix('。')
+        .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn final_text_comes_from_the_final_stage_model() {
     let (_d, conn) =
@@ -469,10 +475,7 @@ async fn final_model_equal_to_the_main_model_reuses_it() {
     wait_final_ready(&p).await;
     assert_eq!(p.final_model().await.unwrap(), "fake");
     let (_, text) = dictate(&p).await;
-    assert!(
-        !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()),
-        "{text}"
-    );
+    assert!(is_fake_seconds(&text), "{text}");
     let log = std::fs::read_to_string(d.dir.join("stderr.log")).unwrap();
     assert!(!log.contains("test final-stage load failure"), "{log}");
 }
@@ -591,12 +594,12 @@ async fn dictionary_reload_between_sessions() {
     let words = |to: &str| -> String { (0..6).map(|n| format!("{n}\t{to}\n")).collect() };
 
     let (_, text) = dictate(&p).await;
-    assert!(text.chars().all(|c| c.is_ascii_digit()), "{text}");
+    assert!(is_fake_seconds(&text), "{text}");
 
     std::fs::create_dir_all(dict.parent().unwrap()).unwrap();
     std::fs::write(&dict, words("one")).unwrap();
     let (_, text) = dictate(&p).await;
-    assert_eq!(text, "one");
+    assert_eq!(text, "one。");
 
     // A session keeps the dictionary it started with.
     let mut states = p.receive_state_changed().await.unwrap();
@@ -609,14 +612,14 @@ async fn dictionary_reload_between_sessions() {
         .await
         .expect("no Final")
         .unwrap();
-    assert_eq!(f.args().unwrap().text, "one");
+    assert_eq!(f.args().unwrap().text, "one。");
     wait_done(&mut states, id).await;
     let (_, text) = dictate(&p).await;
-    assert_eq!(text, "twenty");
+    assert_eq!(text, "twenty。");
 
     std::fs::remove_file(&dict).unwrap();
     let (_, text) = dictate(&p).await;
-    assert!(text.chars().all(|c| c.is_ascii_digit()), "{text}");
+    assert!(is_fake_seconds(&text), "{text}");
 }
 
 fn log_count(d: &Daemon, needle: &str) -> usize {

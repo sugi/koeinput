@@ -71,10 +71,10 @@ int main() {
         KI_CHECK(panel.preedit().empty());
         KI_CHECK(panel.clientPreedit().empty());
     };
-    // Every commit of the fake recognizer in these scenarios is "1".
+    // Every commit of the fake recognizer in these scenarios is "1。".
     auto committed = [&](size_t n) {
         KI_CHECK(commits.size() == n);
-        for (auto &c : commits) KI_CHECK(c == "1");
+        for (auto &c : commits) KI_CHECK(c == "1。");
     };
     auto setOption = [&](const char *path, const char *value) {
         RawConfig raw;

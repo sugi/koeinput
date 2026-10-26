@@ -12,6 +12,8 @@ pub struct Config {
     pub min_length_ms: u64,
     pub max_length_ms: u64,
     pub final_full_max_ms: u64,
+    /// Silence between speech segments that starts a new sentence in the final text; 0 never splits.
+    pub final_split_silence_ms: u64,
     /// Catalog id of the model that decodes the final text; empty in the file means none.
     pub final_model: Option<String>,
     pub dictionary: Option<PathBuf>,
@@ -28,6 +30,7 @@ impl Default for Config {
             min_length_ms: 500,
             max_length_ms: 120_000,
             final_full_max_ms: 30_000,
+            final_split_silence_ms: 800,
             final_model: None,
             dictionary: None,
         }
@@ -79,6 +82,12 @@ impl Config {
         check("min_length_ms", ms(self.min_length_ms), 0, 10_000)?;
         check("max_length_ms", ms(self.max_length_ms), 1_000, 600_000)?;
         check("final_full_max_ms", ms(self.final_full_max_ms), 0, 120_000)?;
+        check(
+            "final_split_silence_ms",
+            ms(self.final_split_silence_ms),
+            0,
+            10_000,
+        )?;
         if self.min_length_ms > self.max_length_ms {
             return Err(ConfigError::Parse(format!(
                 "min_length_ms = {} must not exceed max_length_ms = {}",
@@ -200,6 +209,7 @@ mod tests {
         assert_eq!(cfg.min_length_ms, 500);
         assert_eq!(cfg.max_length_ms, 120_000);
         assert_eq!(cfg.final_full_max_ms, 30_000);
+        assert_eq!(cfg.final_split_silence_ms, 800);
     }
 
     #[test]
@@ -411,6 +421,7 @@ mod tests {
             ("threads = 0", "threads"),
             ("threads = 257", "threads"),
             ("final_full_max_ms = 120001", "final_full_max_ms"),
+            ("final_split_silence_ms = 10001", "final_split_silence_ms"),
         ];
         for (text, key) in cases {
             std::fs::write(&p, text).unwrap();
@@ -421,11 +432,13 @@ mod tests {
         }
         std::fs::write(
             &p,
-            "tail_ms = 0\nmin_length_ms = 0\nthreads = 1\nfinal_full_max_ms = 0\n",
+            "tail_ms = 0\nmin_length_ms = 0\nthreads = 1\nfinal_full_max_ms = 0\nfinal_split_silence_ms = 0\n",
         )
         .unwrap();
         assert!(load(&p).is_ok());
         std::fs::write(&p, "final_full_max_ms = 120000\n").unwrap();
         assert_eq!(load(&p).unwrap().final_full_max_ms, 120_000);
+        std::fs::write(&p, "final_split_silence_ms = 10000\n").unwrap();
+        assert_eq!(load(&p).unwrap().final_split_silence_ms, 10_000);
     }
 }

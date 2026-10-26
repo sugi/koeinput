@@ -312,6 +312,7 @@ mod tests {
                 min_length: 8000,
                 max_length: 160_000,
                 final_full_max: 480_000,
+                final_split_silence: 12_800,
             },
             rec: Arc::new(FakeRecognizer::new(|s| Ok(format!("{}", s.len() / 16000)))),
             final_rec: None,
@@ -342,7 +343,7 @@ mod tests {
         assert_eq!(ev.first(), Some(&Event::State(State::Starting)));
         assert!(ev.contains(&Event::State(State::Recording)));
         assert!(ev.iter().any(|e| matches!(e, Event::Partial(_))));
-        assert!(ev.contains(&Event::Final("3".into())), "{ev:?}");
+        assert!(ev.contains(&Event::Final("3。".into())), "{ev:?}");
         assert_eq!(ev.last(), Some(&Event::State(State::Done)));
     }
 
@@ -352,7 +353,7 @@ mod tests {
         let f = Arc::new(FakeRecognizer::new(|s| Ok(format!("F{}", s.len() / 16000))));
         eng.final_rec = Some(f.clone());
         let ev = collect(&eng.start(Source::Samples(vec![0.1; 3 * 16000])));
-        assert!(ev.contains(&Event::Final("F3".into())), "{ev:?}");
+        assert!(ev.contains(&Event::Final("F3。".into())), "{ev:?}");
         assert!(
             ev.iter()
                 .any(|e| matches!(e, Event::Partial(t) if !t.starts_with('F'))),
@@ -439,6 +440,7 @@ mod tests {
                 min_length: 1600,
                 max_length: 1_600_000,
                 final_full_max: 480_000,
+                final_split_silence: 12_800,
             },
             rec: Arc::new(FakeRecognizer::new(|s| {
                 std::thread::sleep(Duration::from_millis(300));
@@ -455,7 +457,7 @@ mod tests {
         let n = ev
             .iter()
             .find_map(|e| match e {
-                Event::Final(t) => t.parse::<usize>().ok(),
+                Event::Final(t) => t.strip_suffix('。')?.parse::<usize>().ok(),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("no final: {ev:?}"));
