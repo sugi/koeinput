@@ -9,6 +9,9 @@ static POLITE_QUESTION_END: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:です|ます|ません|ました|でした|でしょう|ましょう)か$").unwrap()
 });
 
+static POLITE_STATEMENT_END: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:です|ます|ました|でした|ません|ください)$").unwrap());
+
 const SENTENCE_END_MARKS: [char; 9] = ['。', '．', '.', '？', '?', '！', '!', '、', ','];
 
 const FILLERS: [&str; 8] = [
@@ -42,7 +45,7 @@ impl PostProcessor {
         let t = self.replace_dictionary(&t);
         let t = remove_fillers(&t);
         let t = full_width_marks(&t);
-        question_for_period(&remove_japanese_spaces(&t))
+        close_polite_endings(&remove_japanese_spaces(&t))
     }
 
     fn replace_dictionary(&self, text: &str) -> String {
@@ -138,14 +141,15 @@ fn full_width_marks(text: &str) -> String {
     out
 }
 
-fn question_for_period(text: &str) -> String {
+fn close_polite_endings(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
-        out.push(if c == '。' && POLITE_QUESTION_END.is_match(&out) {
-            '？'
-        } else {
-            c
-        });
+        let mark = match c {
+            '。' | '、' if POLITE_QUESTION_END.is_match(&out) => '？',
+            '、' if POLITE_STATEMENT_END.is_match(&out) => '。',
+            _ => c,
+        };
+        out.push(mark);
     }
     out
 }
@@ -506,6 +510,37 @@ mod tests {
         assert_eq!(p.apply("ますか?"), "ますか？");
         assert_eq!(p.apply("そうですかね。"), "そうですかね。");
         assert_eq!(p.apply("そうか。"), "そうか。");
+    }
+
+    #[test]
+    fn comma_after_a_polite_ending_becomes_a_sentence_end() {
+        let p = PostProcessor::empty();
+        assert_eq!(p.apply("行きます、明日も"), "行きます。明日も");
+        assert_eq!(p.apply("お願いします、"), "お願いします。");
+        assert_eq!(p.apply("してください、"), "してください。");
+        for (from, to) in [
+            ("です、", "です。"),
+            ("ました、", "ました。"),
+            ("でした、", "でした。"),
+            ("ません、", "ません。"),
+        ] {
+            assert_eq!(p.apply(from), to);
+        }
+        assert_eq!(p.apply("ますか、"), "ますか？");
+        assert_eq!(p.apply("でしょうか、次"), "でしょうか？次");
+        assert_eq!(p.apply("ませんか、"), "ませんか？");
+        assert_eq!(p.apply("します 、次"), "します。次");
+        for kept in [
+            "ますが、",
+            "ですね、",
+            "そうか、",
+            "ましょう、",
+            "だ、",
+            "です,",
+        ] {
+            assert_eq!(p.apply(kept), kept);
+        }
+        assert_eq!(end_sentence(&p.apply("してください、")), "してください。");
     }
 
     #[test]
