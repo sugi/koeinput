@@ -41,7 +41,8 @@ impl PostProcessor {
         let t = ARTEFACT.replace_all(text, "");
         let t = self.replace_dictionary(&t);
         let t = remove_fillers(&t);
-        punctuate(&remove_japanese_spaces(&t))
+        let t = full_width_marks(&t);
+        question_for_period(&remove_japanese_spaces(&t))
     }
 
     fn replace_dictionary(&self, text: &str) -> String {
@@ -118,7 +119,7 @@ fn remove_japanese_spaces(text: &str) -> String {
     out
 }
 
-fn punctuate(text: &str) -> String {
+fn full_width_marks(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         let after_japanese = || {
@@ -130,10 +131,21 @@ fn punctuate(text: &str) -> String {
         let mapped = match c {
             '?' if after_japanese() => '？',
             '!' if after_japanese() => '！',
-            '。' if POLITE_QUESTION_END.is_match(&out) => '？',
             _ => c,
         };
         out.push(mapped);
+    }
+    out
+}
+
+fn question_for_period(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        out.push(if c == '。' && POLITE_QUESTION_END.is_match(&out) {
+            '？'
+        } else {
+            c
+        });
     }
     out
 }
@@ -475,7 +487,10 @@ mod tests {
         let p = PostProcessor::empty();
         assert_eq!(p.apply("本当?"), "本当？");
         assert_eq!(p.apply("すごい!"), "すごい！");
-        assert_eq!(p.apply("本当 ?"), "本当 ？");
+        assert_eq!(p.apply("本当 ?"), "本当？");
+        assert_eq!(p.apply("ますか ?"), "ますか？");
+        assert_eq!(p.apply("ますか 。"), "ますか？");
+        assert_eq!(p.apply("Is it OK ?"), "Is it OK ?");
         assert_eq!(p.apply("Is it OK?"), "Is it OK?");
         assert_eq!(p.apply("Wow!"), "Wow!");
     }
