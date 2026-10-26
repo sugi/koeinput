@@ -141,12 +141,17 @@ fn full_width_marks(text: &str) -> String {
     out
 }
 
+/// `すみません、` opens a sentence, so its `、` is a real comma.
+fn is_apology_opener(text: &str) -> bool {
+    text.ends_with("すみません") || text.ends_with("すいません")
+}
+
 fn close_polite_endings(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         let mark = match c {
             '。' | '、' if POLITE_QUESTION_END.is_match(&out) => '？',
-            '、' if POLITE_STATEMENT_END.is_match(&out) => '。',
+            '、' if POLITE_STATEMENT_END.is_match(&out) && !is_apology_opener(&out) => '。',
             _ => c,
         };
         out.push(mark);
@@ -526,6 +531,9 @@ mod tests {
         ] {
             assert_eq!(p.apply(from), to);
         }
+        assert_eq!(p.apply("わかりません、次"), "わかりません。次");
+        assert_eq!(p.apply("すみません、ちょっと"), "すみません、ちょっと");
+        assert_eq!(p.apply("すいません、"), "すいません、");
         assert_eq!(p.apply("ますか、"), "ますか？");
         assert_eq!(p.apply("でしょうか、次"), "でしょうか？次");
         assert_eq!(p.apply("ませんか、"), "ませんか？");
