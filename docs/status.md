@@ -77,7 +77,7 @@ Decisions are in [decisions.md](decisions.md#sentence-punctuation), numbers in [
 
 Spec: [M4 spec](superpowers/specs/2026-10-18-m4-quality-design.md). Decisions are in [decisions.md](decisions.md#quality-m4), numbers in [m4-results.md](m4-results.md).
 
-- The final text came from one decode of the whole utterance (up to `final_full_max_ms`, 30 s). On the user's recordings this removed the `。` at pause points, kept the CER (27.8% against 27.7%) and kept the final p90 under 1 s, also under build load. Later, the sentence punctuation change replaced this: the final text is decoded per chunk between pauses of 800 ms or more, see below.
+- The final text came from one decode of the whole utterance (up to `final_full_max_ms`, 30 s). On the user's recordings this removed the `。` at pause points, kept the CER (27.8% against 27.7%) and kept the final p90 under 1 s, also under build load. Later, the sentence punctuation change replaced this: the final text is decoded per chunk between pauses of 800 ms or more, see the Sentence punctuation section.
 - An optional final-stage model: `koeinput model use cohere-transcribe --final`. It is more accurate (CER 23.2%) but slower (final p90 2.2 s, 3.9 s under load) and needs 4.4 GiB, so it stays off by default; the user decides.
 - `koeinput dict add/remove/list`; the daemon reloads the dictionary at the next session.
 - The addon's "Partial text" setting (in the app, in the panel, off) and a list of apps that always use the panel. Key releases pair with their presses by keycode.

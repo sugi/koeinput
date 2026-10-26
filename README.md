@@ -129,7 +129,7 @@ It can be more accurate but is slower and uses more memory.
 `final_full_max_ms` (30 s) is a total budget for these whole-chunk decodes in one utterance. The latest chunks use it first; an older chunk that does not fit uses the default model's segments.
 The final text keeps sentence breaks. A pause of about 0.8 s starts a new sentence, and each sentence ends with `。`, or `？` after a polite question such as `ですか`.
 `final_split_silence_ms` in `~/.config/koeinput/config.toml` sets that pause length in milliseconds, and `0` turns the split off.
-Short pauses stay inside a sentence. A `、` right after a polite ending such as `です` or `ます` becomes `。`, or `？` after a polite question.
+Short pauses stay inside a sentence. A `、` right after a polite ending such as `です` or `ます` becomes `。`, or `？` after a polite question. The `、` after `すみません` or `すいません` stays.
 [docs/spike-results.md](docs/spike-results.md) compares the models on one speaker's recordings. Treat it as a rough guide, not a benchmark.
 Models are listed with their origin and license in [docs/models.md](docs/models.md).
 

@@ -92,7 +92,7 @@ Use `--from-file` to install from an archive you already downloaded.
 ## Final text
 
 The final text is decoded per chunk. The VAD segments are grouped into chunks: a gap of at least `final_split_silence_ms` (default 800) between two segments starts a new chunk, and `0` never splits.
-Each chunk is decoded again as one piece, and the model puts `。` or `？` at its end. Dictionary, fillers and punctuation rules run per chunk.
+Each chunk is decoded again as one piece, and the session closes it with `。`, or `？` after a polite question ending, unless the model already ended it with punctuation. Dictionary, fillers and punctuation rules run per chunk.
 `final_full_max_ms` (default 30000, so 30 s) is a total budget for these decodes in one utterance. The latest chunks use it first. A chunk that does not fit in what is left joins the texts of its VAD segments instead, as the partial text does.
 `final_full_max_ms = 0` in `~/.config/koeinput/config.toml` always joins the segments.
 The measurements behind the defaults are in [m4-results.md](m4-results.md) and [punctuation-results.md](punctuation-results.md).

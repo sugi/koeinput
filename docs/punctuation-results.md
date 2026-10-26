@@ -41,7 +41,7 @@ The earlier measurement of the whole-utterance decode is in [m4-results.md](m4-r
 | split1000 | 7 | 0 of 3 | 0.46 s |
 
 Compared with Run A, the `、` rule added 4 `。` to whole, 2 to split600, 3 to split800 and 4 to split1000 in free speech.
-The final p90 differs by up to 0.05 s between the two runs for the same mode. This is run-to-run noise: other processes used more CPU during Run A.
+The final p90 differs by up to 0.05 s between the two runs for the same mode. This is run-to-run noise; each mode ran once.
 
 ## Run C: with load
 
