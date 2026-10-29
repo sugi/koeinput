@@ -30,7 +30,7 @@ impl Default for Config {
             min_length_ms: 500,
             max_length_ms: 120_000,
             final_full_max_ms: 30_000,
-            final_split_silence_ms: 800,
+            final_split_silence_ms: 1000,
             final_model: None,
             dictionary: None,
         }
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(cfg.min_length_ms, 500);
         assert_eq!(cfg.max_length_ms, 120_000);
         assert_eq!(cfg.final_full_max_ms, 30_000);
-        assert_eq!(cfg.final_split_silence_ms, 800);
+        assert_eq!(cfg.final_split_silence_ms, 1000);
     }
 
     #[test]

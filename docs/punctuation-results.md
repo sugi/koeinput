@@ -3,7 +3,7 @@
 Date: 2026-10-27. Raw outputs are in `work/results/punct/` and `work/results/punct-rule/` (not in git). This file has aggregate numbers only.
 
 The measurement checks the change that keeps sentence breaks in the final text: the chunked final decode at longer pauses, the end marks and the punctuation rules.
-It sets the default pause length. The decisions are in [decisions.md](decisions.md#sentence-punctuation).
+It set the default pause length to 800 ms. On 2026-10-29 the default moved to 1000 ms after daily use. The decisions are in [decisions.md](decisions.md#sentence-punctuation).
 The earlier measurement of the whole-utterance decode is in [m4-results.md](m4-results.md).
 
 ## Setup
@@ -25,8 +25,8 @@ The earlier measurement of the whole-utterance decode is in [m4-results.md](m4-r
 |---|---|---|---|---|---|---|---|---|---|
 | whole (no split) | 27.8% (21–34) | 0 | 0 (0 of 25 items) | 0 of 3 | 0.21 s | 0.48 s | 0.75 s | 5 | 1 |
 | split600 | 27.8% (21–34) | 3 | 1 (1 of 25 items) | 2 of 3 | 0.21 s | 0.53 s | 0.68 s | 16 | 0 |
-| split800 (default) | 27.7% (21–34) | 1 | 1 (1 of 25 items) | 0 of 3 | 0.19 s | 0.55 s | 0.70 s | 13 | 0 |
-| split1000 | 27.8% (21–34) | 0 | 0 (0 of 25 items) | 0 of 3 | 0.19 s | 0.43 s | 0.67 s | 11 | 0 |
+| split800 | 27.7% (21–34) | 1 | 1 (1 of 25 items) | 0 of 3 | 0.19 s | 0.55 s | 0.70 s | 13 | 0 |
+| split1000 (default since 2026-10-29) | 27.8% (21–34) | 0 | 0 (0 of 25 items) | 0 of 3 | 0.19 s | 0.43 s | 0.67 s | 11 | 0 |
 
 - In every mode, 2 of the 5 noise clips gave text, the peak memory was 0.9 GiB, and the partial interval was 0.50 s at p50 and p90.
 - The end mark and the question rules are also on in `whole`, which is why it has 5 `。` inside free speech where M4 had 1.
@@ -67,7 +67,7 @@ The final texts of the modes were read side by side (not quoted here; counts onl
 ## What this means
 
 - The split puts sentence breaks in the free speech: 13 `。` inside the text with 800 ms instead of 1 or 5 without the split, about 7 of them at real sentence ends.
-- 800 ms is the default. 600 ms puts more `。` in the middle of sentences. 1000 ms misses real sentence ends that 800 ms found. The accuracy is the same in all modes (CER 27.7% to 27.8%).
+- 800 ms became the default. 600 ms puts more `。` in the middle of sentences. 1000 ms misses real sentence ends that 800 ms found. The accuracy is the same in all modes (CER 27.7% to 27.8%).
 - The latency stays within the target: final p90 about 0.55 s without load, and about 1.3 s with the tail under load.
 - The `、` rule turns the `、` that the model writes at a real sentence end after a polite form into `。`. All 3 cases it changed in split800 were sentence ends.
 
